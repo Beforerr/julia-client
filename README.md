@@ -4,15 +4,15 @@ Persistent Julia REPL client and daemon.
 
 Runs Julia code in a long-lived session over a Unix socket so that state (variables, loaded packages) survives between calls. The project environment is auto-detected from `$PWD`.
 
-## Installation
-
-**Pre-built binary** (no Go required) — download from [GitHub Releases](https://github.com/Beforerr/julia-client/releases/latest), extract, and put `julia-client` on your `$PATH`.
-
-**From source** (requires Go 1.22+):
+## Quickstart
 
 ```bash
-go install github.com/Beforerr/julia-client/go@latest
+curl -fsSL https://raw.githubusercontent.com/Beforerr/julia-client/main/install.sh | bash
 ```
+
+This installs `julia-client` to `~/.local/bin`. Override destination with `INSTALL_DIR=/usr/local/bin` or pin a version with `VERSION=v0.1.0`.
+
+To uninstall: `rm "$(which julia-client)"`.
 
 Requires Julia on `$PATH`. The single binary acts as both client and daemon (daemon auto-starts on first `eval`).
 
