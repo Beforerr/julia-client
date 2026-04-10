@@ -1,0 +1,6 @@
+.venv
+uv.lock
+**/__pycache__
+**/*.pyc
+julia-mcp
+/julia-client
