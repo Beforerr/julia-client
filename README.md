@@ -8,13 +8,22 @@ Runs Julia code in a long-lived session over a Unix socket so that state (variab
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Beforerr/julia-client/main/install.sh | bash
+# Override destination with `INSTALL_DIR=/usr/local/bin`.
 ```
 
-This installs `julia-client` to `~/.local/bin`. Override destination with `INSTALL_DIR=/usr/local/bin` or pin a version with `VERSION=v0.1.0`.
+This installs `julia-client` to `~/.local/bin`. The single binary acts as both client and daemon (daemon auto-starts on first `eval`).
 
 To uninstall: `rm "$(which julia-client)"`.
 
-Requires Julia on `$PATH`. The single binary acts as both client and daemon (daemon auto-starts on first `eval`).
+## Agent skill
+
+The included skill at `skills/julia-client/SKILL.md` teaches Agent how to use `julia-client`.
+
+```bash
+npx skills add https://github.com/Beforerr/julia-client
+```
+
+Or manually by adding this repo's `skills/` directory to your Agent skill search paths.
 
 ## Usage
 
@@ -36,10 +45,6 @@ julia-client sessions   # list active sessions
 julia-client restart    # restart current session
 julia-client stop       # shut down the daemon
 ```
-
-## Claude Code skill
-
-The included skill at `skills/julia-client/SKILL.md` teaches Claude Code how to use `julia-client`. Install it by adding this repo's `skills/` directory to your Claude Code skill search paths.
 
 ## Architecture
 
