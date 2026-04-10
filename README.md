@@ -16,16 +16,6 @@ go install github.com/Beforerr/julia-client/go@latest
 
 Requires Julia on `$PATH`. The single binary acts as both client and daemon (daemon auto-starts on first `eval`).
 
-## Releases
-
-Tag a version to trigger a release:
-
-```bash
-git tag v0.1.0 && git push origin v0.1.0
-```
-
-GitHub Actions builds cross-platform binaries (Linux/macOS × amd64/arm64, Windows amd64) via GoReleaser and attaches them to the GitHub release.
-
 ## Usage
 
 ```bash
