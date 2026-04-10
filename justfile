@@ -1,5 +1,6 @@
 install:
     go build -o ~/.local/bin/julia-client ./go/
+    npx skills add . -g -y
 
 test:
     go test -v -timeout 300s ./go/
