@@ -30,16 +30,16 @@ GitHub Actions builds cross-platform binaries (Linux/macOS × amd64/arm64, Windo
 
 ```bash
 # Evaluate code (daemon starts automatically)
-julia-client eval 'println("hello")'
+julia-client -e 'println("hello")'
 
 # Pkg operations (disable timeout)
-julia-client eval --timeout 0 'using Pkg; Pkg.add("Example")'
-
-# Custom Julia binary
-julia-client eval --julia-cmd "julia +1.11" 'versioninfo()'
+julia-client --timeout 0 -e 'using Pkg; Pkg.add("Example")'
 
 # Explicit project environment
-julia-client eval --env /path/to/project 'using MyPackage'
+julia-client --project /path/to/project -e 'using MyPackage'
+
+# Read from stdin
+echo 'println("hello")' | julia-client
 
 # Session management
 julia-client sessions   # list active sessions
@@ -57,3 +57,8 @@ A single `julia-client` binary serves as both client and daemon:
 
 - **Client mode** (default) — sends JSON requests over a Unix socket (`~/.local/share/julia-client/julia-daemon.sock`)
 - **Daemon mode** (`julia-client daemon`) — background server managing persistent Julia processes; auto-started on first `eval`, shuts down after 30 minutes of inactivity
+
+## Alternatives
+
+- [julia-mcp](https://github.com/aplavin/julia-mcp?tab=readme-ov-file) is very similar but uses MCP server instead
+- [DaemonicCabal.jl](https://github.com/tecosaur/DaemonicCabal.jl) only runs on Linux
