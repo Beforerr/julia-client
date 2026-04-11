@@ -121,10 +121,6 @@ func (s *JuliaSession) start() error {
 	if _, err := s.executeRaw("", startupTimeout); err != nil {
 		return fmt.Errorf("Julia startup failed: %w", err)
 	}
-	// Load Revise if available (ignore failure)
-	if _, err := s.executeRaw("try; using Revise; catch; end", startupTimeout); err != nil {
-		return err
-	}
 	// TestEnv activation for test/ directories
 	if s.isTest {
 		if _, err := s.executeRaw("using TestEnv; TestEnv.activate()", 0); err != nil {
@@ -202,7 +198,7 @@ func (s *JuliaSession) executeRaw(code string, timeoutSecs float64) (string, err
 	}
 }
 
-func (s *JuliaSession) execute(code string, timeoutSecs float64) (string, error) {
+func (s *JuliaSession) execute(code string, timeoutSecs float64, printResult bool) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -211,10 +207,18 @@ func (s *JuliaSession) execute(code string, timeoutSecs float64) (string, error)
 	}
 
 	hexCode := hex.EncodeToString([]byte(code))
-	wrapped := fmt.Sprintf(
-		`try; Revise.revise(); catch; end;include_string(Main, String(hex2bytes("%s")));nothing`,
-		hexCode,
-	)
+	var wrapped string
+	if printResult {
+		wrapped = fmt.Sprintf(
+			`show(stdout, MIME("text/plain"), include_string(Main, String(hex2bytes("%s"))));println(stdout)`,
+			hexCode,
+		)
+	} else {
+		wrapped = fmt.Sprintf(
+			`include_string(Main, String(hex2bytes("%s")));nothing`,
+			hexCode,
+		)
+	}
 
 	if s.logFile != nil {
 		fmt.Fprintf(s.logFile, "[%s] julia> %s\n", time.Now().Format("15:04:05"), code)

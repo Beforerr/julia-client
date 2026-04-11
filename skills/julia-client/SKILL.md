@@ -6,8 +6,8 @@ description: "Run Julia code in a persistent session with project env auto-detec
 ## Running code
 
 ```bash
-julia-client -e 'x=1'
-julia-client -e 'println(x)'
+julia-client -e 'x=1' # Evaluate
+julia-client -E 'x' # Evaluate and display
 
 # Long-running tasks (pkg install, compile, heavy compute): set longer timeout or disable
 julia-client --timeout 300 -e 'include("heavy_script.jl")'

@@ -123,7 +123,7 @@ func run(socketPath string, payload map[string]any, startIfNeeded bool) {
 	}
 }
 
-func cmdEval(socketPath, code, project string, timeout float64, juliaCmd string) {
+func cmdEval(socketPath, code, project string, timeout float64, juliaCmd string, printResult bool) {
 	if code == "-" {
 		b, err := io.ReadAll(os.Stdin)
 		if err != nil {
@@ -141,6 +141,9 @@ func cmdEval(socketPath, code, project string, timeout float64, juliaCmd string)
 	}
 	if juliaCmd != "" {
 		payload["julia_cmd"] = juliaCmd
+	}
+	if printResult {
+		payload["print_result"] = true
 	}
 	run(socketPath, payload, true)
 }
@@ -161,6 +164,16 @@ func cmdStop(socketPath string) {
 	run(socketPath, map[string]any{"action": "stop"}, false)
 }
 
+// first returns the first non-empty string.
+func first(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 func usage() {
 	fmt.Fprintf(os.Stderr, `julia-client: Julia REPL client
 
@@ -170,6 +183,7 @@ Usage:
 
 Eval flags:
   -e, --eval CODE      Evaluate Julia code (omit or use - to read stdin)
+  -E, --print CODE     Evaluate Julia code and display the result
   --project PATH       Julia project directory (auto-detected from $PWD)
   --timeout SECS       Timeout in seconds (0 = no timeout, default: 60)
   --julia-cmd CMD      Custom Julia binary, e.g. "julia +1.11"
@@ -192,19 +206,24 @@ func main() {
 	socketFlag := flag.String("socket", defaultSocket, "Unix socket path")
 	evalShort := flag.String("e", "", "Evaluate Julia code")
 	evalLong := flag.String("eval", "", "Evaluate Julia code")
+	printShort := flag.String("E", "", "Evaluate and display result")
+	printLong := flag.String("print", "", "Evaluate and display result")
 	projectFlag := flag.String("project", "", "Julia project directory")
 	timeoutFlag := flag.Float64("timeout", -1, "Timeout in seconds")
 	juliaCmdFlag := flag.String("julia-cmd", "", "Custom Julia binary")
 	flag.Usage = usage
 	flag.Parse()
 
-	// -e / --eval: evaluate mode
-	code := *evalShort
-	if code == "" {
-		code = *evalLong
+	// -E / --print: evaluate and display result
+	if code := first(*printShort, *printLong); code != "" {
+		cmdEval(*socketFlag, code, *projectFlag, *timeoutFlag, *juliaCmdFlag, true)
+		return
 	}
+
+	// -e / --eval: evaluate mode
+	code := first(*evalShort, *evalLong)
 	if code != "" {
-		cmdEval(*socketFlag, code, *projectFlag, *timeoutFlag, *juliaCmdFlag)
+		cmdEval(*socketFlag, code, *projectFlag, *timeoutFlag, *juliaCmdFlag, false)
 		return
 	}
 
@@ -216,7 +235,7 @@ func main() {
 		if err != nil || fi.Mode()&os.ModeCharDevice != 0 {
 			usage()
 		}
-		cmdEval(*socketFlag, "-", *projectFlag, *timeoutFlag, *juliaCmdFlag)
+		cmdEval(*socketFlag, "-", *projectFlag, *timeoutFlag, *juliaCmdFlag, false)
 		return
 	}
 

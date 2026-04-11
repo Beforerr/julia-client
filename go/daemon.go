@@ -49,11 +49,12 @@ func handleRequest(state *daemonState, req map[string]any) map[string]any {
 			timeoutSecs = defaultEvalTimeout
 		}
 
+		printResult, _ := req["print_result"].(bool)
 		sess, err := state.manager.getOrCreate(envPath, juliaCmd)
 		if err != nil {
 			return errResp(err.Error())
 		}
-		output, err := sess.execute(code, timeoutSecs)
+		output, err := sess.execute(code, timeoutSecs, printResult)
 		if err != nil {
 			if !sess.isAlive() {
 				state.manager.remove(envPath)
