@@ -1,4 +1,5 @@
 install:
+    julia-client stop
     go build -o ~/.local/bin/julia-client ./go/
     npx skills add . -g -y
 

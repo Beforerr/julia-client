@@ -60,9 +60,6 @@ func handleRequest(state *daemonState, req map[string]any) map[string]any {
 			}
 			return errResp(err.Error())
 		}
-		if output == "" {
-			output = "(no output)"
-		}
 		return map[string]any{"output": output, "error": nil}
 
 	case "restart":

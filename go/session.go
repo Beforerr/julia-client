@@ -139,11 +139,14 @@ func (s *JuliaSession) isAlive() bool {
 }
 
 type readResult struct {
-	lines []string
-	err   error
+	output string
+	err    error
 }
 
 func (s *JuliaSession) executeRaw(code string, timeoutSecs float64) (string, error) {
+	// The sentinel command writes an extra "\n" before the marker so it always
+	// starts on its own line even when the user code didn't end with a newline.
+	// We strip exactly that one "\n" when assembling the result.
 	sentinelCmd := fmt.Sprintf(
 		"flush(stderr); write(stdout, \"\\n\"); println(stdout, \"%s\"); flush(stdout)\n",
 		s.sentinel,
@@ -154,29 +157,30 @@ func (s *JuliaSession) executeRaw(code string, timeoutSecs float64) (string, err
 
 	ch := make(chan readResult, 1)
 	go func() {
-		var lines []string
+		var buf strings.Builder
 		for {
 			line, err := s.stdout.ReadString('\n')
-			trimmed := strings.TrimRight(line, "\r\n")
-			if trimmed == s.sentinel {
-				if len(lines) > 0 && lines[len(lines)-1] == "" {
-					lines = lines[:len(lines)-1]
+			if strings.TrimRight(line, "\r\n") == s.sentinel {
+				// Strip the one "\n" we injected before the sentinel.
+				out := buf.String()
+				if len(out) > 0 && out[len(out)-1] == '\n' {
+					out = out[:len(out)-1]
 				}
-				ch <- readResult{lines, nil}
+				ch <- readResult{out, nil}
 				return
 			}
 			if err != nil {
 				s.dead.Store(true)
-				ch <- readResult{lines, fmt.Errorf("Julia process died during execution.\nOutput before death:\n%s", strings.Join(lines, "\n"))}
+				ch <- readResult{buf.String(), fmt.Errorf("Julia process died during execution.\nOutput before death:\n%s", buf.String())}
 				return
 			}
-			lines = append(lines, trimmed)
+			buf.WriteString(line)
 		}
 	}()
 
 	if timeoutSecs <= 0 {
 		r := <-ch
-		return strings.Join(r.lines, "\n"), r.err
+		return r.output, r.err
 	}
 
 	timer := time.NewTimer(time.Duration(float64(time.Second) * timeoutSecs))
@@ -184,16 +188,15 @@ func (s *JuliaSession) executeRaw(code string, timeoutSecs float64) (string, err
 
 	select {
 	case r := <-ch:
-		return strings.Join(r.lines, "\n"), r.err
+		return r.output, r.err
 	case <-timer.C:
 		s.proc.Process.Kill()
 		s.proc.Wait()
 		s.dead.Store(true)
 		r := <-ch // goroutine unblocks on EOF after kill
-		partial := strings.Join(r.lines, "\n")
 		msg := fmt.Sprintf("Execution timed out after %vs. Session killed; it will restart on next call.", timeoutSecs)
-		if partial != "" {
-			msg += "\n\nOutput before timeout:\n" + partial
+		if r.output != "" {
+			msg += "\n\nOutput before timeout:\n" + r.output
 		}
 		return "", fmt.Errorf("%s", msg)
 	}

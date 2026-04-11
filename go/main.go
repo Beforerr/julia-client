@@ -118,7 +118,9 @@ func run(socketPath string, payload map[string]any, startIfNeeded bool) {
 		fmt.Fprintln(os.Stderr, resp.Error)
 		os.Exit(1)
 	}
-	fmt.Println(resp.Output)
+	if resp.Output != "" {
+		fmt.Print(resp.Output)
+	}
 }
 
 func cmdEval(socketPath, code, project string, timeout float64, juliaCmd string) {

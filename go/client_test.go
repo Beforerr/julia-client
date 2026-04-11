@@ -225,24 +225,34 @@ func TestEvalBasic(t *testing.T) {
 		t.Fatalf("eval error: %v", resp["error"])
 	}
 	out, _ := resp["output"].(string)
-	if out != "hello world" {
-		t.Errorf("eval output = %q, want %q", out, "hello world")
+	if out != "hello world\n" {
+		t.Errorf("eval output = %q, want %q", out, "hello world\n")
 	}
 
 	// State persists across calls
 	send(map[string]any{"action": "eval", "code": "x = 42"})
 	resp2 := send(map[string]any{"action": "eval", "code": "println(x)"})
 	out2, _ := resp2["output"].(string)
-	if out2 != "42" {
-		t.Errorf("state not persisted: x = %q, want 42", out2)
+	if out2 != "42\n" {
+		t.Errorf("state not persisted: x = %q, want %q", out2, "42\n")
 	}
 
 	// Restart clears state
 	send(map[string]any{"action": "restart"})
 	resp3 := send(map[string]any{"action": "eval", "code": "println(isdefined(Main, :x))"})
 	out3, _ := resp3["output"].(string)
-	if out3 != "false" {
+	if out3 != "false\n" {
 		t.Errorf("after restart x should be undefined, got %q", out3)
+	}
+
+	// println adds trailing newline; print does not
+	resp4 := send(map[string]any{"action": "eval", "code": `print("no-nl")`})
+	if out4, _ := resp4["output"].(string); out4 != "no-nl" {
+		t.Errorf("print output = %q, want %q", out4, "no-nl")
+	}
+	resp5 := send(map[string]any{"action": "eval", "code": `println("with-nl")`})
+	if out5, _ := resp5["output"].(string); out5 != "with-nl\n" {
+		t.Errorf("println output = %q, want %q", out5, "with-nl\n")
 	}
 
 	// Stop daemon
