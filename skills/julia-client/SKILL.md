@@ -14,6 +14,10 @@ julia-client --timeout 300 -e 'include("heavy_script.jl")'
 julia-client --timeout 0 -e 'using Pkg; Pkg.add("Example")'
 ```
 
+## Tips
+
+- Prefer `using TestEnv; TestEnv.activate(); include("test/runtests.jl")` over `Pkg.test()`
+
 ## Session management
 
 ```bash
