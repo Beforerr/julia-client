@@ -1,6 +1,6 @@
 ---
 name: julia-client
-description: "Run Julia code in a persistent session with project env auto-detection and timeout handling. Use for efficient Julia code execution."
+description: "Run Julia code with session state persistence, project env auto-detection and timeout handling. Use for efficient Julia code execution."
 ---
 
 ## Running code
@@ -16,6 +16,7 @@ julia-client --timeout 0 -e 'using Pkg; Pkg.add("Example")'
 
 ## Tips
 
+- Only run setup (e.g. `Pkg.activate`, `using`) once per session.
 - Prefer `using TestEnv; TestEnv.activate(); include("test/runtests.jl")` over `Pkg.test()`
 
 ## Session management
