@@ -4,7 +4,7 @@ install:
     npx skills add . -g -y
 
 test:
-    go test -C go -v -timeout 300s ./...
+    go test -C go -v -timeout 300s
 
 release version="":
     #!/usr/bin/env bash

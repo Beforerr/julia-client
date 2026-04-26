@@ -12,6 +12,6 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: go/go.mod
       - uses: julia-actions/setup-julia@v2
-      - run: go test -v -timeout 300s ./go/
+      - run: go test -C go -v -timeout 300s
