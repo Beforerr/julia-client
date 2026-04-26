@@ -1,5 +1,5 @@
 install:
-    julia-client stop
+    -julia-client stop
     go build -C go -o ~/.local/bin/julia-client .
     npx skills add . -g -y
 
@@ -9,7 +9,8 @@ test:
 release version="":
     #!/usr/bin/env bash
     set -euo pipefail
-    if [[ -z "{{ version }}" ]]; then
+    version="{{ version }}"
+    if [[ -z "$version" ]]; then
         latest=$(jj log --no-graph -r 'tags()' --template 'tags ++ "\n"' 2>/dev/null | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
         if [[ -z "$latest" ]]; then
             echo "No existing semver tag found. Please provide a version explicitly: just release v0.1.0" >&2
