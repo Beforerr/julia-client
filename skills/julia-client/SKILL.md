@@ -17,7 +17,6 @@ julia-client --timeout 0 -e 'using Pkg; Pkg.add("Example")'
 ## Tips
 
 - Only run setup (e.g. `Pkg.activate`, `using`) once per session.
-- Prefer `using TestEnv; TestEnv.activate(); include("test/runtests.jl")` over `Pkg.test()`
 
 ## Session management
 

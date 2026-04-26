@@ -121,6 +121,10 @@ func (s *JuliaSession) start() error {
 	if _, err := s.executeRaw("", startupTimeout); err != nil {
 		return fmt.Errorf("Julia startup failed: %w", err)
 	}
+	// Mirror the Julia REPL: load InteractiveUtils so subtypes, @which, etc. work
+	if _, err := s.executeRaw("using InteractiveUtils", startupTimeout); err != nil {
+		return fmt.Errorf("failed to load InteractiveUtils: %w", err)
+	}
 	// TestEnv activation for test/ directories
 	if s.isTest {
 		if _, err := s.executeRaw("using TestEnv; TestEnv.activate()", 0); err != nil {
@@ -210,7 +214,7 @@ func (s *JuliaSession) execute(code string, timeoutSecs float64, printResult boo
 	var wrapped string
 	if printResult {
 		wrapped = fmt.Sprintf(
-			`show(stdout, MIME("text/plain"), include_string(Main, String(hex2bytes("%s"))));println(stdout)`,
+			`show(IOContext(stdout, :limit => true), MIME("text/plain"), include_string(Main, String(hex2bytes("%s"))));println(stdout)`,
 			hexCode,
 		)
 	} else {
