@@ -1,13 +1,10 @@
 install:
     julia-client stop
-    go build -o ~/.local/bin/julia-client ./go/
+    go build -C go -o ~/.local/bin/julia-client .
     npx skills add . -g -y
 
 test:
-    go test -v -timeout 300s ./go/
-
-build:
-    go build -o julia-client ./go/
+    go test -C go -v -timeout 300s ./...
 
 release version="":
     #!/usr/bin/env bash

@@ -4,3 +4,4 @@ uv.lock
 **/*.pyc
 julia-mcp
 /julia-client
+go/go

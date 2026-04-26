@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -18,16 +19,13 @@ var pkgPattern = regexp.MustCompile(`\bPkg\.`)
 
 type daemonState struct {
 	manager     *SessionManager
-	mu          sync.Mutex
-	lastRequest time.Time
+	lastRequest atomic.Int64 // UnixNano
 	stopOnce    sync.Once
 	stopCh      chan struct{}
 }
 
 func handleRequest(state *daemonState, req map[string]any) map[string]any {
-	state.mu.Lock()
-	state.lastRequest = time.Now()
-	state.mu.Unlock()
+	state.lastRequest.Store(time.Now().UnixNano())
 
 	action, _ := req["action"].(string)
 
@@ -144,10 +142,10 @@ func serveDaemon(socketPath string, idleTimeout time.Duration) error {
 	fmt.Fprintf(os.Stderr, "julia-daemon listening on %s\n", socketPath)
 
 	state := &daemonState{
-		manager:     newSessionManager(),
-		lastRequest: time.Now(),
-		stopCh:      make(chan struct{}),
+		manager: newSessionManager(),
+		stopCh:  make(chan struct{}),
 	}
+	state.lastRequest.Store(time.Now().UnixNano())
 
 	// Idle watchdog: closes listener when idle or stop requested
 	go func() {
@@ -159,9 +157,7 @@ func serveDaemon(socketPath string, idleTimeout time.Duration) error {
 				ln.Close()
 				return
 			case <-ticker.C:
-				state.mu.Lock()
-				idle := time.Since(state.lastRequest)
-				state.mu.Unlock()
+				idle := time.Since(time.Unix(0, state.lastRequest.Load()))
 				if idle > idleTimeout {
 					ln.Close()
 					return

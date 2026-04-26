@@ -13,12 +13,14 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 const (
-	defaultEvalTimeout    = 60.0
-	startupTimeout        = 120.0
-	tempSessionKey        = "__temp__"
+	defaultEvalTimeout = 60.0
+	startupTimeout     = 120.0
+	tempSessionKey     = "__temp__"
 )
 
 // JuliaSession manages a single persistent Julia subprocess.
@@ -244,6 +246,9 @@ func (s *JuliaSession) kill() {
 		s.proc.Process.Kill()
 		s.proc.Wait()
 	}
+	if s.logFile != nil {
+		s.logFile.Close()
+	}
 	if s.isTemp {
 		os.RemoveAll(s.envDir)
 	}
@@ -251,20 +256,17 @@ func (s *JuliaSession) kill() {
 
 // SessionManager tracks multiple named Julia sessions.
 type SessionManager struct {
-	mu          sync.Mutex
-	sessions    map[string]*JuliaSession
-	createLocks map[string]*sync.Mutex
-	logDir      string
-	logFiles    map[string]*os.File
+	mu       sync.Mutex
+	sessions map[string]*JuliaSession
+	sf       singleflight.Group
+	logDir   string
 }
 
 func newSessionManager() *SessionManager {
 	logDir, _ := os.MkdirTemp("", "julia-client-logs-")
 	return &SessionManager{
-		sessions:    make(map[string]*JuliaSession),
-		createLocks: make(map[string]*sync.Mutex),
-		logDir:      logDir,
-		logFiles:    make(map[string]*os.File),
+		sessions: make(map[string]*JuliaSession),
+		logDir:   logDir,
 	}
 }
 
@@ -276,35 +278,19 @@ func (m *SessionManager) key(envPath string) string {
 	return abs
 }
 
-func (m *SessionManager) logFile(key string) *os.File {
-	if f, ok := m.logFiles[key]; ok {
-		return f
-	}
+func (m *SessionManager) openLogFile(key string) *os.File {
 	safe := strings.NewReplacer("/", "_", "\\", "_").Replace(strings.Trim(key, "/"))
 	if safe == "" {
 		safe = "temp"
 	}
-	f, err := os.OpenFile(filepath.Join(m.logDir, safe+".log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return nil
-	}
-	m.logFiles[key] = f
+	f, _ := os.OpenFile(filepath.Join(m.logDir, safe+".log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	return f
-}
-
-func (m *SessionManager) createLock(key string) *sync.Mutex {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.createLocks[key] == nil {
-		m.createLocks[key] = &sync.Mutex{}
-	}
-	return m.createLocks[key]
 }
 
 func (m *SessionManager) getOrCreate(envPath, juliaCmd string) (*JuliaSession, error) {
 	key := m.key(envPath)
 
-	// Fast path
+	// Fast path: return existing live session without singleflight overhead.
 	m.mu.Lock()
 	sess := m.sessions[key]
 	m.mu.Unlock()
@@ -312,52 +298,50 @@ func (m *SessionManager) getOrCreate(envPath, juliaCmd string) (*JuliaSession, e
 		return sess, nil
 	}
 
-	// Slow path: serialize creation per key
-	mu := m.createLock(key)
-	mu.Lock()
-	defer mu.Unlock()
-
-	m.mu.Lock()
-	sess = m.sessions[key]
-	m.mu.Unlock()
-	if sess != nil && sess.isAlive() && sess.juliaCmd == juliaCmd {
-		return sess, nil
-	}
-	if sess != nil {
-		sess.kill()
+	// Slow path: deduplicate concurrent creation for the same key.
+	v, err, _ := m.sf.Do(key, func() (any, error) {
 		m.mu.Lock()
-		delete(m.sessions, key)
+		sess := m.sessions[key]
 		m.mu.Unlock()
-	}
+		if sess != nil && sess.isAlive() && sess.juliaCmd == juliaCmd {
+			return sess, nil
+		}
+		if sess != nil {
+			sess.kill()
+			m.mu.Lock()
+			delete(m.sessions, key)
+			m.mu.Unlock()
+		}
 
-	isTemp := envPath == ""
-	var envDir string
-	var isTest bool
-	if isTemp {
-		var err error
-		envDir, err = os.MkdirTemp("", "julia-client-")
-		if err != nil {
+		isTemp := envPath == ""
+		var envDir string
+		var isTest bool
+		if isTemp {
+			var err error
+			envDir, err = os.MkdirTemp("", "julia-client-")
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			abs, _ := filepath.Abs(envPath)
+			envDir = abs
+			isTest = filepath.Base(envDir) == "test"
+		}
+
+		sess = newJuliaSession(envDir, newSentinel(), isTemp, isTest, juliaCmd, m.openLogFile(key))
+		if err := sess.start(); err != nil {
 			return nil, err
 		}
-	} else {
-		abs, _ := filepath.Abs(envPath)
-		envDir = abs
-		isTest = filepath.Base(envDir) == "test"
-	}
 
-	m.mu.Lock()
-	lf := m.logFile(key)
-	m.mu.Unlock()
-
-	sess = newJuliaSession(envDir, newSentinel(), isTemp, isTest, juliaCmd, lf)
-	if err := sess.start(); err != nil {
+		m.mu.Lock()
+		m.sessions[key] = sess
+		m.mu.Unlock()
+		return sess, nil
+	})
+	if err != nil {
 		return nil, err
 	}
-
-	m.mu.Lock()
-	m.sessions[key] = sess
-	m.mu.Unlock()
-	return sess, nil
+	return v.(*JuliaSession), nil
 }
 
 func (m *SessionManager) remove(envPath string) {
@@ -390,15 +374,15 @@ func (m *SessionManager) list() []sessionInfo {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	result := make([]sessionInfo, 0, len(m.sessions))
-	for key, sess := range m.sessions {
+	for _, sess := range m.sessions {
 		info := sessionInfo{
 			envPath:  sess.envDir,
 			alive:    sess.isAlive(),
 			isTemp:   sess.isTemp,
 			juliaCmd: sess.juliaCmd,
 		}
-		if f := m.logFiles[key]; f != nil {
-			info.logFile = f.Name()
+		if sess.logFile != nil {
+			info.logFile = sess.logFile.Name()
 		}
 		result = append(result, info)
 	}
@@ -416,9 +400,6 @@ func (m *SessionManager) shutdown() {
 
 	for _, s := range sessions {
 		s.kill()
-	}
-	for _, f := range m.logFiles {
-		f.Close()
 	}
 	os.RemoveAll(m.logDir)
 }

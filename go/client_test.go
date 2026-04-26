@@ -95,11 +95,12 @@ func TestPkgPattern(t *testing.T) {
 // ---- handleRequest (no Julia needed) ----
 
 func newTestState() *daemonState {
-	return &daemonState{
-		manager:     newSessionManager(),
-		lastRequest: time.Now(),
-		stopCh:      make(chan struct{}),
+	s := &daemonState{
+		manager: newSessionManager(),
+		stopCh:  make(chan struct{}),
 	}
+	s.lastRequest.Store(time.Now().UnixNano())
+	return s
 }
 
 func TestHandleRequest_Ping(t *testing.T) {
