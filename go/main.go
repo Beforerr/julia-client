@@ -16,41 +16,6 @@ import (
 
 var defaultSocket = filepath.Join(os.Getenv("HOME"), ".local", "share", "julia-client", "julia-daemon.sock")
 
-func detectEnv(start string) string {
-	if start == "" {
-		var err error
-		start, err = os.Getwd()
-		if err != nil {
-			return ""
-		}
-	}
-	dir, err := filepath.Abs(start)
-	if err != nil {
-		return ""
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "Project.toml")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	return ""
-}
-
-// resolveProject returns an absolute project path: auto-detected if project is empty,
-// absolutized if the caller supplied a (possibly relative) path.
-func resolveProject(project string) string {
-	if project == "" {
-		return detectEnv("")
-	}
-	abs, _ := filepath.Abs(project)
-	return abs
-}
-
 func startDaemon(socketPath string) {
 	// Re-exec ourselves with the daemon subcommand — no external dependency.
 	self, err := os.Executable()
@@ -123,7 +88,16 @@ func run(socketPath string, payload map[string]any, startIfNeeded bool) {
 	}
 }
 
-func cmdEval(socketPath, code, project string, timeout float64, juliaCmd string, printResult bool) {
+func mustGetwd() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error: cannot determine working directory:", err)
+		os.Exit(1)
+	}
+	return cwd
+}
+
+func cmdEval(socketPath, code, project, session string, timeout float64, juliaCmd string, printResult bool) {
 	if code == "-" {
 		b, err := io.ReadAll(os.Stdin)
 		if err != nil {
@@ -132,9 +106,13 @@ func cmdEval(socketPath, code, project string, timeout float64, juliaCmd string,
 		}
 		code = string(b)
 	}
-	payload := map[string]any{"action": "eval", "code": code}
-	if p := resolveProject(project); p != "" {
-		payload["env_path"] = p
+	projectArg := project
+	if project != "@." {
+		projectArg, _ = filepath.Abs(project)
+	}
+	payload := map[string]any{"action": "eval", "code": code, "cwd": mustGetwd(), "project": projectArg}
+	if session != "" {
+		payload["session"] = session
 	}
 	if timeout != -1 {
 		payload["timeout"] = timeout
@@ -152,10 +130,14 @@ func cmdSessions(socketPath string) {
 	run(socketPath, map[string]any{"action": "sessions"}, false)
 }
 
-func cmdRestart(socketPath, project string) {
-	payload := map[string]any{"action": "restart"}
-	if p := resolveProject(project); p != "" {
-		payload["env_path"] = p
+func cmdRestart(socketPath, project, session string) {
+	projectArg := project
+	if project != "@." {
+		projectArg, _ = filepath.Abs(project)
+	}
+	payload := map[string]any{"action": "restart", "cwd": mustGetwd(), "project": projectArg}
+	if session != "" {
+		payload["session"] = session
 	}
 	run(socketPath, payload, false)
 }
@@ -179,20 +161,27 @@ func usage() {
 
 Usage:
   julia-client [flags] [-e CODE]
-  julia-client [flags] script.jl
+  julia-client script.jl
   julia-client [--socket PATH] <command> [options]
 
 Eval flags:
   -e, --eval CODE      Evaluate Julia code (omit or use - to read stdin)
   -E, --print CODE     Evaluate Julia code and display the result
-  --project PATH       Julia project directory (auto-detected from $PWD)
+  --project PATH       Julia project directory (passed as --project to Julia)
+  --session LABEL      Named session to create or reuse across directories
   --timeout SECS       Timeout in seconds (0 = no timeout, default: 60)
   --julia-cmd CMD      Custom Julia binary, e.g. "julia +1.11"
+
+Session routing (priority order):
+  --session LABEL      Shared by label, regardless of directory
+  --project PATH       Keyed by project path
+  (default)            Keyed by current working directory; Julia uses --project=@.
 
 Commands:
   sessions             List active Julia sessions
   restart              Restart a Julia session, clearing all state
-    --project PATH     Project directory
+    --project PATH     Target session by project path
+    --session LABEL    Target session by label
   stop                 Stop the daemon
   daemon               Run the daemon in the foreground (normally auto-started)
     --idle-timeout SECS  Shut down after idle (default: 1800)
@@ -209,7 +198,8 @@ func main() {
 	evalLong := flag.String("eval", "", "Evaluate Julia code")
 	printShort := flag.String("E", "", "Evaluate and display result")
 	printLong := flag.String("print", "", "Evaluate and display result")
-	projectFlag := flag.String("project", "", "Julia project directory")
+	projectFlag := flag.String("project", "@.", "Julia project directory")
+	sessionFlag := flag.String("session", "", "Named session label")
 	timeoutFlag := flag.Float64("timeout", -1, "Timeout in seconds")
 	juliaCmdFlag := flag.String("julia-cmd", "", "Custom Julia binary")
 	flag.Usage = usage
@@ -217,14 +207,14 @@ func main() {
 
 	// -E / --print: evaluate and display result
 	if code := first(*printShort, *printLong); code != "" {
-		cmdEval(*socketFlag, code, *projectFlag, *timeoutFlag, *juliaCmdFlag, true)
+		cmdEval(*socketFlag, code, *projectFlag, *sessionFlag, *timeoutFlag, *juliaCmdFlag, true)
 		return
 	}
 
 	// -e / --eval: evaluate mode
 	code := first(*evalShort, *evalLong)
 	if code != "" {
-		cmdEval(*socketFlag, code, *projectFlag, *timeoutFlag, *juliaCmdFlag, false)
+		cmdEval(*socketFlag, code, *projectFlag, *sessionFlag, *timeoutFlag, *juliaCmdFlag, false)
 		return
 	}
 
@@ -236,7 +226,7 @@ func main() {
 		if err != nil || fi.Mode()&os.ModeCharDevice != 0 {
 			usage()
 		}
-		cmdEval(*socketFlag, "-", *projectFlag, *timeoutFlag, *juliaCmdFlag, false)
+		cmdEval(*socketFlag, "-", *projectFlag, *sessionFlag, *timeoutFlag, *juliaCmdFlag, false)
 		return
 	}
 
@@ -247,8 +237,9 @@ func main() {
 	case "restart":
 		fs := flag.NewFlagSet("restart", flag.ExitOnError)
 		project := fs.String("project", "", "Project directory")
+		session := fs.String("session", "", "Session label")
 		fs.Parse(args[1:])
-		cmdRestart(*socketFlag, *project)
+		cmdRestart(*socketFlag, *project, *session)
 
 	case "stop":
 		cmdStop(*socketFlag)
@@ -269,7 +260,7 @@ func main() {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
 			}
-			cmdEval(*socketFlag, string(b), *projectFlag, *timeoutFlag, *juliaCmdFlag, false)
+			cmdEval(*socketFlag, string(b), *projectFlag, *sessionFlag, *timeoutFlag, *juliaCmdFlag, false)
 			return
 		}
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])

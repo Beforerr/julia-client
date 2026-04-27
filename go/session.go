@@ -20,16 +20,13 @@ import (
 const (
 	defaultEvalTimeout = 60.0
 	startupTimeout     = 120.0
-	tempSessionKey     = "__temp__"
 )
 
 // JuliaSession manages a single persistent Julia subprocess.
 type JuliaSession struct {
-	envDir   string
-	sentinel string
-	isTemp   bool
-	isTest   bool
-	juliaCmd string
+	projectVal string // pre-computed --project= arg (also used for display)
+	sentinel   string
+	juliaCmd   string
 
 	proc   *exec.Cmd
 	stdin  io.WriteCloser
@@ -46,25 +43,17 @@ func newSentinel() string {
 	return fmt.Sprintf("__JULIA_CLIENT_%s__", hex.EncodeToString(b))
 }
 
-func newJuliaSession(envDir, sentinel string, isTemp, isTest bool, juliaCmd string, logFile *os.File) *JuliaSession {
+func newJuliaSession(projectVal, sentinel, juliaCmd string, logFile *os.File) *JuliaSession {
 	return &JuliaSession{
-		envDir:   envDir,
-		sentinel: sentinel,
-		isTemp:   isTemp,
-		isTest:   isTest,
-		juliaCmd: juliaCmd,
-		logFile:  logFile,
+		projectVal: projectVal,
+		sentinel:   sentinel,
+		juliaCmd:   juliaCmd,
+		logFile:    logFile,
 	}
 }
 
-func (s *JuliaSession) projectPath() string {
-	if s.isTest {
-		return filepath.Dir(s.envDir)
-	}
-	return s.envDir
-}
 
-func (s *JuliaSession) start() error {
+func (s *JuliaSession) start(workDir string) error {
 	exe := "julia"
 	var channelArgs, extraFlags []string
 
@@ -90,10 +79,10 @@ func (s *JuliaSession) start() error {
 
 	args := append(channelArgs, "-i", "--threads=auto")
 	args = append(args, extraFlags...)
-	args = append(args, fmt.Sprintf("--project=%s", s.projectPath()))
+	args = append(args, fmt.Sprintf("--project=%s", s.projectVal))
 
 	cmd := exec.Command(exe, args...)
-	cmd.Dir = s.envDir
+	cmd.Dir = workDir
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -126,12 +115,6 @@ func (s *JuliaSession) start() error {
 	// Mirror the Julia REPL: load InteractiveUtils so subtypes, @which, etc. work
 	if _, err := s.executeRaw("using InteractiveUtils", startupTimeout); err != nil {
 		return fmt.Errorf("failed to load InteractiveUtils: %w", err)
-	}
-	// TestEnv activation for test/ directories
-	if s.isTest {
-		if _, err := s.executeRaw("using TestEnv; TestEnv.activate()", 0); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -249,9 +232,6 @@ func (s *JuliaSession) kill() {
 	if s.logFile != nil {
 		s.logFile.Close()
 	}
-	if s.isTemp {
-		os.RemoveAll(s.envDir)
-	}
 }
 
 // SessionManager tracks multiple named Julia sessions.
@@ -270,25 +250,30 @@ func newSessionManager() *SessionManager {
 	}
 }
 
-func (m *SessionManager) key(envPath string) string {
-	if envPath == "" {
-		return tempSessionKey
+// key returns the session map key.
+// Priority: explicit session label > explicit project path > cwd.
+func (m *SessionManager) key(session, project, cwd string) string {
+	if session != "" {
+		return "~" + session
 	}
-	abs, _ := filepath.Abs(envPath)
-	return abs
+	if project != "" && project != "@." {
+		abs, _ := filepath.Abs(project)
+		return abs
+	}
+	return cwd
 }
 
 func (m *SessionManager) openLogFile(key string) *os.File {
-	safe := strings.NewReplacer("/", "_", "\\", "_").Replace(strings.Trim(key, "/"))
+	safe := strings.NewReplacer("/", "_", "\\", "_").Replace(strings.Trim(key, "/~"))
 	if safe == "" {
-		safe = "temp"
+		safe = "default"
 	}
 	f, _ := os.OpenFile(filepath.Join(m.logDir, safe+".log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	return f
 }
 
-func (m *SessionManager) getOrCreate(envPath, juliaCmd string) (*JuliaSession, error) {
-	key := m.key(envPath)
+func (m *SessionManager) getOrCreate(cwd, project, session, juliaCmd string) (*JuliaSession, error) {
+	key := m.key(session, project, cwd)
 
 	// Fast path: return existing live session without singleflight overhead.
 	m.mu.Lock()
@@ -313,23 +298,12 @@ func (m *SessionManager) getOrCreate(envPath, juliaCmd string) (*JuliaSession, e
 			m.mu.Unlock()
 		}
 
-		isTemp := envPath == ""
-		var envDir string
-		var isTest bool
-		if isTemp {
-			var err error
-			envDir, err = os.MkdirTemp("", "julia-client-")
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			abs, _ := filepath.Abs(envPath)
-			envDir = abs
-			isTest = filepath.Base(envDir) == "test"
+		projectVal := project
+		if projectVal == "" {
+			projectVal = "@."
 		}
-
-		sess = newJuliaSession(envDir, newSentinel(), isTemp, isTest, juliaCmd, m.openLogFile(key))
-		if err := sess.start(); err != nil {
+		sess = newJuliaSession(projectVal, newSentinel(), juliaCmd, m.openLogFile(key))
+		if err := sess.start(cwd); err != nil {
 			return nil, err
 		}
 
@@ -344,15 +318,15 @@ func (m *SessionManager) getOrCreate(envPath, juliaCmd string) (*JuliaSession, e
 	return v.(*JuliaSession), nil
 }
 
-func (m *SessionManager) remove(envPath string) {
-	key := m.key(envPath)
+func (m *SessionManager) remove(session, project, cwd string) {
+	key := m.key(session, project, cwd)
 	m.mu.Lock()
 	delete(m.sessions, key)
 	m.mu.Unlock()
 }
 
-func (m *SessionManager) restart(envPath string) {
-	key := m.key(envPath)
+func (m *SessionManager) restart(session, project, cwd string) {
+	key := m.key(session, project, cwd)
 	m.mu.Lock()
 	sess := m.sessions[key]
 	delete(m.sessions, key)
@@ -363,9 +337,8 @@ func (m *SessionManager) restart(envPath string) {
 }
 
 type sessionInfo struct {
-	envPath  string
+	project  string
 	alive    bool
-	isTemp   bool
 	juliaCmd string
 	logFile  string
 }
@@ -376,9 +349,8 @@ func (m *SessionManager) list() []sessionInfo {
 	result := make([]sessionInfo, 0, len(m.sessions))
 	for _, sess := range m.sessions {
 		info := sessionInfo{
-			envPath:  sess.envDir,
+			project:  sess.projectVal,
 			alive:    sess.isAlive(),
-			isTemp:   sess.isTemp,
 			juliaCmd: sess.juliaCmd,
 		}
 		if sess.logFile != nil {
