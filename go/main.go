@@ -179,6 +179,7 @@ func usage() {
 
 Usage:
   julia-client [flags] [-e CODE]
+  julia-client [flags] script.jl
   julia-client [--socket PATH] <command> [options]
 
 Eval flags:
@@ -262,6 +263,15 @@ func main() {
 		}
 
 	default:
+		if filepath.Ext(args[0]) == ".jl" {
+			b, err := os.ReadFile(args[0])
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			cmdEval(*socketFlag, string(b), *projectFlag, *timeoutFlag, *juliaCmdFlag, false)
+			return
+		}
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
 		usage()
 	}
