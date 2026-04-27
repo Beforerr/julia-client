@@ -59,34 +59,33 @@ func newTestState() *daemonState {
 
 func TestHandleRequest_Ping(t *testing.T) {
 	state := newTestState()
-	resp := handleRequest(state, map[string]any{"action": "ping"})
-	if resp["output"] != "pong" {
-		t.Errorf("ping response = %v, want pong", resp["output"])
+	resp := handleRequest(state, protocolRequest{Action: "ping"})
+	if resp.Output != "pong" {
+		t.Errorf("ping response = %v, want pong", resp.Output)
 	}
 }
 
 func TestHandleRequest_SessionsEmpty(t *testing.T) {
 	state := newTestState()
-	resp := handleRequest(state, map[string]any{"action": "sessions"})
-	out, _ := resp["output"].(string)
-	if out != "No active Julia sessions." {
-		t.Errorf("sessions response = %q", out)
+	resp := handleRequest(state, protocolRequest{Action: "sessions"})
+	if resp.Output != "No active Julia sessions." {
+		t.Errorf("sessions response = %q", resp.Output)
 	}
 }
 
 func TestHandleRequest_UnknownAction(t *testing.T) {
 	state := newTestState()
-	resp := handleRequest(state, map[string]any{"action": "bogus"})
-	if resp["error"] == nil {
+	resp := handleRequest(state, protocolRequest{Action: "bogus"})
+	if resp.Error == "" {
 		t.Error("expected error for unknown action")
 	}
 }
 
 func TestHandleRequest_Stop(t *testing.T) {
 	state := newTestState()
-	resp := handleRequest(state, map[string]any{"action": "stop"})
-	if resp["output"] != "Daemon stopping." {
-		t.Errorf("stop response = %v", resp["output"])
+	resp := handleRequest(state, protocolRequest{Action: "stop"})
+	if resp.Output != "Daemon stopping." {
+		t.Errorf("stop response = %v", resp.Output)
 	}
 	select {
 	case <-state.stopCh:
@@ -113,7 +112,7 @@ func startTestDaemon(t *testing.T) (socketPath string, stop func(), wg *sync.Wai
 	stop = func() {
 		conn, _ := net.Dial("unix", socketPath)
 		if conn != nil {
-			json.NewEncoder(conn).Encode(map[string]any{"action": "stop"})
+			json.NewEncoder(conn).Encode(protocolRequest{Action: "stop"})
 			conn.Close()
 		}
 		wg.Wait()
@@ -133,15 +132,15 @@ func waitForSocket(t *testing.T, socketPath string) {
 	t.Fatal("daemon socket did not appear in time")
 }
 
-func sendRequest(t *testing.T, socketPath string, payload map[string]any) map[string]any {
+func sendRequest(t *testing.T, socketPath string, req protocolRequest) response {
 	t.Helper()
 	conn, err := net.Dial("unix", socketPath)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
 	defer conn.Close()
-	json.NewEncoder(conn).Encode(payload)
-	var resp map[string]any
+	json.NewEncoder(conn).Encode(req)
+	var resp response
 	json.NewDecoder(conn).Decode(&resp)
 	return resp
 }
@@ -152,9 +151,9 @@ func TestDaemonPingOverSocket(t *testing.T) {
 	socketPath, stop, _ := startTestDaemon(t)
 	defer stop()
 
-	resp := sendRequest(t, socketPath, map[string]any{"action": "ping"})
-	if resp["output"] != "pong" {
-		t.Errorf("ping over socket = %v, want pong", resp["output"])
+	resp := sendRequest(t, socketPath, protocolRequest{Action: "ping"})
+	if resp.Output != "pong" {
+		t.Errorf("ping over socket = %v, want pong", resp.Output)
 	}
 }
 
@@ -165,46 +164,46 @@ func TestEvalBasic(t *testing.T) {
 	defer stop()
 
 	cwd, _ := os.Getwd()
-	send := func(payload map[string]any) map[string]any {
-		if _, ok := payload["cwd"]; !ok {
-			payload["cwd"] = cwd
+	send := func(req protocolRequest) response {
+		if req.Cwd == "" {
+			req.Cwd = cwd
 		}
-		return sendRequest(t, socketPath, payload)
+		return sendRequest(t, socketPath, req)
 	}
 
 	// Eval basic expression
-	resp := send(map[string]any{"action": "eval", "code": `println("hello world")`})
-	if resp["error"] != nil {
-		t.Fatalf("eval error: %v", resp["error"])
+	resp := send(protocolRequest{Action: "eval", Code: `println("hello world")`})
+	if resp.Error != "" {
+		t.Fatalf("eval error: %v", resp.Error)
 	}
-	out, _ := resp["output"].(string)
+	out := resp.Output
 	if out != "hello world\n" {
 		t.Errorf("eval output = %q, want %q", out, "hello world\n")
 	}
 
 	// State persists across calls
-	send(map[string]any{"action": "eval", "code": "x = 42"})
-	resp2 := send(map[string]any{"action": "eval", "code": "println(x)"})
-	out2, _ := resp2["output"].(string)
+	send(protocolRequest{Action: "eval", Code: "x = 42"})
+	resp2 := send(protocolRequest{Action: "eval", Code: "println(x)"})
+	out2 := resp2.Output
 	if out2 != "42\n" {
 		t.Errorf("state not persisted: x = %q, want %q", out2, "42\n")
 	}
 
 	// Fresh eval clears state before running code.
-	resp3 := send(map[string]any{"action": "eval", "code": "println(isdefined(Main, :x))", "fresh": true})
-	out3, _ := resp3["output"].(string)
+	resp3 := send(protocolRequest{Action: "eval", Code: "println(isdefined(Main, :x))", Fresh: true})
+	out3 := resp3.Output
 	if out3 != "false\n" {
 		t.Errorf("after fresh eval x should be undefined, got %q", out3)
 	}
 
 	// println adds trailing newline; print does not
-	resp4 := send(map[string]any{"action": "eval", "code": `print("no-nl")`})
-	if out4, _ := resp4["output"].(string); out4 != "no-nl" {
-		t.Errorf("print output = %q, want %q", out4, "no-nl")
+	resp4 := send(protocolRequest{Action: "eval", Code: `print("no-nl")`})
+	if resp4.Output != "no-nl" {
+		t.Errorf("print output = %q, want %q", resp4.Output, "no-nl")
 	}
-	resp5 := send(map[string]any{"action": "eval", "code": `println("with-nl")`})
-	if out5, _ := resp5["output"].(string); out5 != "with-nl\n" {
-		t.Errorf("println output = %q, want %q", out5, "with-nl\n")
+	resp5 := send(protocolRequest{Action: "eval", Code: `println("with-nl")`})
+	if resp5.Output != "with-nl\n" {
+		t.Errorf("println output = %q, want %q", resp5.Output, "with-nl\n")
 	}
 }
 
@@ -234,16 +233,16 @@ func TestPrintResult(t *testing.T) {
 	defer stop()
 
 	cwd, _ := os.Getwd()
-	resp := sendRequest(t, socketPath, map[string]any{
-		"action":       "eval",
-		"code":         "1 + 1",
-		"cwd":          cwd,
-		"print_result": true,
+	resp := sendRequest(t, socketPath, protocolRequest{
+		Action:      "eval",
+		Code:        "1 + 1",
+		Cwd:         cwd,
+		PrintResult: true,
 	})
-	if resp["error"] != nil {
-		t.Fatalf("print_result error: %v", resp["error"])
+	if resp.Error != "" {
+		t.Fatalf("print_result error: %v", resp.Error)
 	}
-	if out, _ := resp["output"].(string); out != "2\n" {
-		t.Errorf("print_result output = %q, want %q", out, "2\n")
+	if resp.Output != "2\n" {
+		t.Errorf("print_result output = %q, want %q", resp.Output, "2\n")
 	}
 }

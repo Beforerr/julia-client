@@ -51,14 +51,26 @@ type response struct {
 	Error  string `json:"error"`
 }
 
-func request(socketPath string, payload map[string]any, startIfNeeded bool) (response, error) {
+type protocolRequest struct {
+	Action      string   `json:"action"`
+	Code        string   `json:"code,omitempty"`
+	Cwd         string   `json:"cwd,omitempty"`
+	Project     string   `json:"project,omitempty"`
+	Session     string   `json:"session,omitempty"`
+	Timeout     *float64 `json:"timeout,omitempty"`
+	JuliaCmd    string   `json:"julia_cmd,omitempty"`
+	PrintResult bool     `json:"print_result,omitempty"`
+	Fresh       bool     `json:"fresh,omitempty"`
+}
+
+func request(socketPath string, req protocolRequest, startIfNeeded bool) (response, error) {
 	conn, err := connect(socketPath, startIfNeeded)
 	if err != nil {
 		return response{}, err
 	}
 	defer conn.Close()
 
-	if err := json.NewEncoder(conn).Encode(payload); err != nil {
+	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		return response{}, err
 	}
 
@@ -73,8 +85,8 @@ func request(socketPath string, payload map[string]any, startIfNeeded bool) (res
 	return resp, scanner.Err()
 }
 
-func run(socketPath string, payload map[string]any, startIfNeeded bool) {
-	resp, err := request(socketPath, payload, startIfNeeded)
+func run(socketPath string, req protocolRequest, startIfNeeded bool) {
+	resp, err := request(socketPath, req, startIfNeeded)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -110,31 +122,20 @@ func cmdEval(socketPath, code, project, session string, timeout float64, juliaCm
 	if project != "@." {
 		projectArg, _ = filepath.Abs(project)
 	}
-	payload := map[string]any{"action": "eval", "code": code, "cwd": mustGetwd(), "project": projectArg}
-	if session != "" {
-		payload["session"] = session
+	req := protocolRequest{
+		Action:  "eval",
+		Code:    code,
+		Cwd:     mustGetwd(),
+		Project: projectArg,
+		Session: session,
 	}
 	if timeout != -1 {
-		payload["timeout"] = timeout
+		req.Timeout = &timeout
 	}
-	if juliaCmd != "" {
-		payload["julia_cmd"] = juliaCmd
-	}
-	if printResult {
-		payload["print_result"] = true
-	}
-	if fresh {
-		payload["fresh"] = true
-	}
-	run(socketPath, payload, true)
-}
-
-func cmdSessions(socketPath string) {
-	run(socketPath, map[string]any{"action": "sessions"}, false)
-}
-
-func cmdStop(socketPath string) {
-	run(socketPath, map[string]any{"action": "stop"}, false)
+	req.JuliaCmd = juliaCmd
+	req.PrintResult = printResult
+	req.Fresh = fresh
+	run(socketPath, req, true)
 }
 
 // first returns the first non-empty string.
@@ -221,10 +222,10 @@ func main() {
 
 	switch args[0] {
 	case "sessions":
-		cmdSessions(*socketFlag)
+		run(*socketFlag, protocolRequest{Action: "sessions"}, false)
 
 	case "stop":
-		cmdStop(*socketFlag)
+		run(*socketFlag, protocolRequest{Action: "stop"}, false)
 
 	case "daemon":
 		fs := flag.NewFlagSet("daemon", flag.ExitOnError)

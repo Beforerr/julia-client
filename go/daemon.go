@@ -24,53 +24,43 @@ type daemonState struct {
 	stopCh      chan struct{}
 }
 
-func handleRequest(state *daemonState, req map[string]any) map[string]any {
+func handleRequest(state *daemonState, req protocolRequest) response {
 	state.lastRequest.Store(time.Now().UnixNano())
 
-	action, _ := req["action"].(string)
-
-	switch action {
+	switch req.Action {
 	case "eval":
-		code, _ := req["code"].(string)
-		cwd, _ := req["cwd"].(string)
-		project, _ := req["project"].(string)
-		session, _ := req["session"].(string)
-		juliaCmd, _ := req["julia_cmd"].(string)
-		fresh, _ := req["fresh"].(bool)
-
 		var timeoutSecs float64
-		if t, ok := req["timeout"]; ok {
-			if v, ok := t.(float64); ok && v > 0 {
-				timeoutSecs = v
+		if req.Timeout != nil {
+			if *req.Timeout > 0 {
+				timeoutSecs = *req.Timeout
 			}
 			// v <= 0 means no timeout; timeoutSecs stays 0
-		} else if pkgPattern.MatchString(code) {
+		} else if pkgPattern.MatchString(req.Code) {
 			timeoutSecs = 0 // Pkg operations: no timeout
 		} else {
 			timeoutSecs = defaultEvalTimeout
 		}
 
-		printResult, _ := req["print_result"].(bool)
-		if fresh {
-			state.manager.restart(session, project, cwd)
+		if req.Fresh {
+			state.manager.restart(req.Session, req.Project, req.Cwd)
 		}
-		sess, err := state.manager.getOrCreate(cwd, project, session, juliaCmd)
+		sess, err := state.manager.getOrCreate(req.Cwd, req.Project, req.Session, req.JuliaCmd)
 		if err != nil {
 			return errResp(err.Error())
 		}
-		output, err := sess.execute(code, timeoutSecs, printResult)
+		output, err := sess.execute(req.Code, timeoutSecs, req.PrintResult)
 		if err != nil {
 			if !sess.isAlive() {
-				state.manager.remove(session, project, cwd)
+				state.manager.remove(req.Session, req.Project, req.Cwd)
 			}
 			return errResp(err.Error())
 		}
-		return map[string]any{"output": output, "error": nil}
+		return response{Output: output}
 
 	case "sessions":
 		sessions := state.manager.list()
 		if len(sessions) == 0 {
-			return map[string]any{"output": "No active Julia sessions.", "error": nil}
+			return response{Output: "No active Julia sessions."}
 		}
 		lines := []string{"Active Julia sessions:"}
 		for _, s := range sessions {
@@ -87,22 +77,22 @@ func handleRequest(state *daemonState, req map[string]any) map[string]any {
 			}
 			lines = append(lines, line)
 		}
-		return map[string]any{"output": strings.Join(lines, "\n"), "error": nil}
+		return response{Output: strings.Join(lines, "\n")}
 
 	case "stop":
 		state.stopOnce.Do(func() { close(state.stopCh) })
-		return map[string]any{"output": "Daemon stopping.", "error": nil}
+		return response{Output: "Daemon stopping."}
 
 	case "ping":
-		return map[string]any{"output": "pong", "error": nil}
+		return response{Output: "pong"}
 
 	default:
-		return errResp(fmt.Sprintf("Unknown action: %q", action))
+		return errResp(fmt.Sprintf("Unknown action: %q", req.Action))
 	}
 }
 
-func errResp(msg string) map[string]any {
-	return map[string]any{"output": nil, "error": msg}
+func errResp(msg string) response {
+	return response{Error: msg}
 }
 
 func handleConn(conn net.Conn, state *daemonState) {
@@ -114,7 +104,7 @@ func handleConn(conn net.Conn, state *daemonState) {
 		return
 	}
 
-	var req map[string]any
+	var req protocolRequest
 	if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
 		json.NewEncoder(conn).Encode(errResp(fmt.Sprintf("invalid JSON: %v", err)))
 		return
