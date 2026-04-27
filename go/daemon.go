@@ -32,7 +32,9 @@ func handleRequest(state *daemonState, req map[string]any) map[string]any {
 	switch action {
 	case "eval":
 		code, _ := req["code"].(string)
-		envPath, _ := req["env_path"].(string)
+		cwd, _ := req["cwd"].(string)
+		project, _ := req["project"].(string)
+		session, _ := req["session"].(string)
 		juliaCmd, _ := req["julia_cmd"].(string)
 
 		var timeoutSecs float64
@@ -48,22 +50,24 @@ func handleRequest(state *daemonState, req map[string]any) map[string]any {
 		}
 
 		printResult, _ := req["print_result"].(bool)
-		sess, err := state.manager.getOrCreate(envPath, juliaCmd)
+		sess, err := state.manager.getOrCreate(cwd, project, session, juliaCmd)
 		if err != nil {
 			return errResp(err.Error())
 		}
 		output, err := sess.execute(code, timeoutSecs, printResult)
 		if err != nil {
 			if !sess.isAlive() {
-				state.manager.remove(envPath)
+				state.manager.remove(session, project, cwd)
 			}
 			return errResp(err.Error())
 		}
 		return map[string]any{"output": output, "error": nil}
 
 	case "restart":
-		envPath, _ := req["env_path"].(string)
-		state.manager.restart(envPath)
+		cwd, _ := req["cwd"].(string)
+		project, _ := req["project"].(string)
+		session, _ := req["session"].(string)
+		state.manager.restart(session, project, cwd)
 		return map[string]any{"output": "Session restarted.", "error": nil}
 
 	case "sessions":
@@ -77,11 +81,7 @@ func handleRequest(state *daemonState, req map[string]any) map[string]any {
 			if !s.alive {
 				status = "dead"
 			}
-			label := s.envPath
-			if s.isTemp {
-				label += " (temp)"
-			}
-			line := fmt.Sprintf("  %s: %s", label, status)
+			line := fmt.Sprintf("  %s: %s", s.project, status)
 			if s.juliaCmd != "" {
 				line += " julia_cmd=" + s.juliaCmd
 			}

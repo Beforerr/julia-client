@@ -21,63 +21,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// ---- detectEnv / resolveProject ----
-
-func TestDetectEnv_FindsProjectToml(t *testing.T) {
-	root := t.TempDir()
-	sub := filepath.Join(root, "a", "b")
-	if err := os.MkdirAll(sub, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "Project.toml"), []byte{}, 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	got := detectEnv(sub)
-	if got != root {
-		t.Errorf("detectEnv(%q) = %q, want %q", sub, got, root)
-	}
-}
-
-func TestDetectEnv_NoneFound(t *testing.T) {
-	dir := t.TempDir()
-	// Make sure there's no Project.toml anywhere up the tree
-	// (TempDir is under /tmp which never has one)
-	got := detectEnv(dir)
-	if got != "" {
-		t.Errorf("detectEnv(%q) = %q, want empty", dir, got)
-	}
-}
-
-func TestResolveProject_Empty(t *testing.T) {
-	// When empty, result is either a detected env or "".
-	// Just ensure it doesn't panic and returns a valid absolute path or "".
-	got := resolveProject("")
-	if got != "" {
-		if !filepath.IsAbs(got) {
-			t.Errorf("resolveProject(\"\") = %q, want absolute path or empty", got)
-		}
-	}
-}
-
-func TestResolveProject_Relative(t *testing.T) {
-	root := t.TempDir()
-	sub := filepath.Join(root, "proj")
-	os.Mkdir(sub, 0755)
-
-	orig, _ := os.Getwd()
-	os.Chdir(root)
-	defer os.Chdir(orig)
-
-	got := resolveProject("proj")
-	// Resolve symlinks on both sides (macOS /var → /private/var)
-	gotR, _ := filepath.EvalSymlinks(got)
-	subR, _ := filepath.EvalSymlinks(sub)
-	if gotR != subR {
-		t.Errorf("resolveProject(\"proj\") = %q, want %q", got, sub)
-	}
-}
-
 // ---- pkgPattern ----
 
 func TestPkgPattern(t *testing.T) {
@@ -221,7 +164,11 @@ func TestEvalBasic(t *testing.T) {
 	socketPath, stop, _ := startTestDaemon(t)
 	defer stop()
 
+	cwd, _ := os.Getwd()
 	send := func(payload map[string]any) map[string]any {
+		if _, ok := payload["cwd"]; !ok {
+			payload["cwd"] = cwd
+		}
 		return sendRequest(t, socketPath, payload)
 	}
 
@@ -287,9 +234,11 @@ func TestPrintResult(t *testing.T) {
 	socketPath, stop, _ := startTestDaemon(t)
 	defer stop()
 
+	cwd, _ := os.Getwd()
 	resp := sendRequest(t, socketPath, map[string]any{
 		"action":       "eval",
 		"code":         "1 + 1",
+		"cwd":          cwd,
 		"print_result": true,
 	})
 	if resp["error"] != nil {
