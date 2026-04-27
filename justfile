@@ -6,6 +6,28 @@ install:
 test:
     go test -C go -v -timeout 300s
 
+bench-startup runs="5":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bin=julia-client
+    socket="$(mktemp -t julia-client-bench.XXXXXX.sock)"
+    rm -f "$socket"
+    cleanup() {
+        "$bin" --socket "$socket" stop >/dev/null 2>&1 || true
+        rm -f "$bin" "$socket"
+    }
+    trap cleanup EXIT
+    "$bin" --socket "$socket" -e 'println(1)' >/dev/null
+
+    hyperfine --runs {{ runs }} \
+        --command-name "cold startup + first eval" \
+        --prepare "'$bin' --socket '$socket' stop >/dev/null 2>&1 || true; rm -f '$socket'" \
+        "'$bin' --socket '$socket' -e 'println(1)' >/dev/null"
+
+    hyperfine --runs {{ runs }} --warmup 1 --shell=none \
+        --command-name "warm eval" \
+        "'$bin' --socket '$socket' -e 'println(1)' >/dev/null"
+
 release version="":
     #!/usr/bin/env bash
     set -euo pipefail
