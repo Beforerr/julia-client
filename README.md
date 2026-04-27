@@ -31,9 +31,6 @@ Or manually by adding this repo's `skills/` directory to your Agent skill search
 # Evaluate code (daemon starts automatically)
 julia-client -e 'println("hello")'
 
-# Pkg operations (disable timeout)
-julia-client --timeout 0 -e 'using Pkg; Pkg.add("Example")'
-
 # Explicit project environment
 julia-client --project /path/to/project -e 'using MyPackage'
 
@@ -42,7 +39,6 @@ echo 'println("hello")' | julia-client
 
 # Session management
 julia-client sessions   # list active sessions
-julia-client restart    # restart current session
 julia-client stop       # shut down the daemon
 ```
 

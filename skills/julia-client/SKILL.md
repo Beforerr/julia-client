@@ -6,12 +6,12 @@ description: "Run Julia code with session state persistence, project env auto-de
 ## Running code
 
 ```bash
-julia-client -e 'x=1' # Evaluate
+julia-client -e 'const x=1' # Evaluate
 julia-client -E 'x' # Evaluate and display
+julia-client --fresh -E 'x=2' # Run with clean session state
 
-# Long-running tasks (pkg install, compile, heavy compute): set longer timeout or disable
-julia-client --timeout 300 -e 'include("heavy_script.jl")'
-julia-client --timeout 0 -e 'using Pkg; Pkg.add("Example")'
+# Long-running tasks (pkg install, compile, heavy compute): set longer timeout or disable (0)
+julia-client --timeout 300 heavy_script.jl
 ```
 
 ## Tips
@@ -22,6 +22,5 @@ julia-client --timeout 0 -e 'using Pkg; Pkg.add("Example")'
 
 ```bash
 julia-client sessions   # list active sessions
-julia-client restart    # restart session (slow, loses state; use if "Julia session has died")
 julia-client stop       # shut down the daemon
 ```

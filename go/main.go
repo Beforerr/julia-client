@@ -97,7 +97,7 @@ func mustGetwd() string {
 	return cwd
 }
 
-func cmdEval(socketPath, code, project, session string, timeout float64, juliaCmd string, printResult bool) {
+func cmdEval(socketPath, code, project, session string, timeout float64, juliaCmd string, printResult, fresh bool) {
 	if code == "-" {
 		b, err := io.ReadAll(os.Stdin)
 		if err != nil {
@@ -123,23 +123,14 @@ func cmdEval(socketPath, code, project, session string, timeout float64, juliaCm
 	if printResult {
 		payload["print_result"] = true
 	}
+	if fresh {
+		payload["fresh"] = true
+	}
 	run(socketPath, payload, true)
 }
 
 func cmdSessions(socketPath string) {
 	run(socketPath, map[string]any{"action": "sessions"}, false)
-}
-
-func cmdRestart(socketPath, project, session string) {
-	projectArg := project
-	if project != "@." {
-		projectArg, _ = filepath.Abs(project)
-	}
-	payload := map[string]any{"action": "restart", "cwd": mustGetwd(), "project": projectArg}
-	if session != "" {
-		payload["session"] = session
-	}
-	run(socketPath, payload, false)
 }
 
 func cmdStop(socketPath string) {
@@ -160,8 +151,7 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `julia-client: Julia REPL client
 
 Usage:
-  julia-client [flags] [-e CODE]
-  julia-client script.jl
+  julia-client [flags] [file] [-e CODE]
   julia-client [--socket PATH] <command> [options]
 
 Eval flags:
@@ -169,6 +159,7 @@ Eval flags:
   -E, --print CODE     Evaluate Julia code and display the result
   --project PATH       Julia project directory (passed as --project to Julia)
   --session LABEL      Named session to create or reuse across directories
+  --fresh              Clear the targeted session before evaluating
   --timeout SECS       Timeout in seconds (0 = no timeout, default: 60)
   --julia-cmd CMD      Custom Julia binary, e.g. "julia +1.11"
 
@@ -179,9 +170,6 @@ Session routing (priority order):
 
 Commands:
   sessions             List active Julia sessions
-  restart              Restart a Julia session, clearing all state
-    --project PATH     Target session by project path
-    --session LABEL    Target session by label
   stop                 Stop the daemon
   daemon               Run the daemon in the foreground (normally auto-started)
     --idle-timeout SECS  Shut down after idle (default: 1800)
@@ -200,6 +188,7 @@ func main() {
 	printLong := flag.String("print", "", "Evaluate and display result")
 	projectFlag := flag.String("project", "@.", "Julia project directory")
 	sessionFlag := flag.String("session", "", "Named session label")
+	freshFlag := flag.Bool("fresh", false, "Clear the targeted session before evaluating")
 	timeoutFlag := flag.Float64("timeout", -1, "Timeout in seconds")
 	juliaCmdFlag := flag.String("julia-cmd", "", "Custom Julia binary")
 	flag.Usage = usage
@@ -207,14 +196,14 @@ func main() {
 
 	// -E / --print: evaluate and display result
 	if code := first(*printShort, *printLong); code != "" {
-		cmdEval(*socketFlag, code, *projectFlag, *sessionFlag, *timeoutFlag, *juliaCmdFlag, true)
+		cmdEval(*socketFlag, code, *projectFlag, *sessionFlag, *timeoutFlag, *juliaCmdFlag, true, *freshFlag)
 		return
 	}
 
 	// -e / --eval: evaluate mode
 	code := first(*evalShort, *evalLong)
 	if code != "" {
-		cmdEval(*socketFlag, code, *projectFlag, *sessionFlag, *timeoutFlag, *juliaCmdFlag, false)
+		cmdEval(*socketFlag, code, *projectFlag, *sessionFlag, *timeoutFlag, *juliaCmdFlag, false, *freshFlag)
 		return
 	}
 
@@ -226,20 +215,13 @@ func main() {
 		if err != nil || fi.Mode()&os.ModeCharDevice != 0 {
 			usage()
 		}
-		cmdEval(*socketFlag, "-", *projectFlag, *sessionFlag, *timeoutFlag, *juliaCmdFlag, false)
+		cmdEval(*socketFlag, "-", *projectFlag, *sessionFlag, *timeoutFlag, *juliaCmdFlag, false, *freshFlag)
 		return
 	}
 
 	switch args[0] {
 	case "sessions":
 		cmdSessions(*socketFlag)
-
-	case "restart":
-		fs := flag.NewFlagSet("restart", flag.ExitOnError)
-		project := fs.String("project", "", "Project directory")
-		session := fs.String("session", "", "Session label")
-		fs.Parse(args[1:])
-		cmdRestart(*socketFlag, *project, *session)
 
 	case "stop":
 		cmdStop(*socketFlag)
@@ -260,7 +242,7 @@ func main() {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
 			}
-			cmdEval(*socketFlag, string(b), *projectFlag, *sessionFlag, *timeoutFlag, *juliaCmdFlag, false)
+			cmdEval(*socketFlag, string(b), *projectFlag, *sessionFlag, *timeoutFlag, *juliaCmdFlag, false, *freshFlag)
 			return
 		}
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
