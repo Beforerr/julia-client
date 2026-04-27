@@ -190,12 +190,11 @@ func TestEvalBasic(t *testing.T) {
 		t.Errorf("state not persisted: x = %q, want %q", out2, "42\n")
 	}
 
-	// Restart clears state
-	send(map[string]any{"action": "restart"})
-	resp3 := send(map[string]any{"action": "eval", "code": "println(isdefined(Main, :x))"})
+	// Fresh eval clears state before running code.
+	resp3 := send(map[string]any{"action": "eval", "code": "println(isdefined(Main, :x))", "fresh": true})
 	out3, _ := resp3["output"].(string)
 	if out3 != "false\n" {
-		t.Errorf("after restart x should be undefined, got %q", out3)
+		t.Errorf("after fresh eval x should be undefined, got %q", out3)
 	}
 
 	// println adds trailing newline; print does not

@@ -36,6 +36,7 @@ func handleRequest(state *daemonState, req map[string]any) map[string]any {
 		project, _ := req["project"].(string)
 		session, _ := req["session"].(string)
 		juliaCmd, _ := req["julia_cmd"].(string)
+		fresh, _ := req["fresh"].(bool)
 
 		var timeoutSecs float64
 		if t, ok := req["timeout"]; ok {
@@ -50,6 +51,9 @@ func handleRequest(state *daemonState, req map[string]any) map[string]any {
 		}
 
 		printResult, _ := req["print_result"].(bool)
+		if fresh {
+			state.manager.restart(session, project, cwd)
+		}
 		sess, err := state.manager.getOrCreate(cwd, project, session, juliaCmd)
 		if err != nil {
 			return errResp(err.Error())
@@ -62,13 +66,6 @@ func handleRequest(state *daemonState, req map[string]any) map[string]any {
 			return errResp(err.Error())
 		}
 		return map[string]any{"output": output, "error": nil}
-
-	case "restart":
-		cwd, _ := req["cwd"].(string)
-		project, _ := req["project"].(string)
-		session, _ := req["session"].(string)
-		state.manager.restart(session, project, cwd)
-		return map[string]any{"output": "Session restarted.", "error": nil}
 
 	case "sessions":
 		sessions := state.manager.list()
