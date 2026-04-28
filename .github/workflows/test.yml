@@ -14,4 +14,5 @@ jobs:
         with:
           go-version-file: go.mod
       - uses: julia-actions/setup-julia@v2
+      - run: julia -e 'using Pkg; Pkg.add("Revise")'
       - run: go test -C go -v -timeout 300s

@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // TestMain allows the test binary to act as the CLI when TEST_CLI=1,
@@ -35,14 +37,10 @@ func TestPkgPattern(t *testing.T) {
 		"# no package ops here",
 	}
 	for _, s := range hits {
-		if !pkgPattern.MatchString(s) {
-			t.Errorf("pkgPattern should match %q", s)
-		}
+		require.Truef(t, pkgPattern.MatchString(s), "pkgPattern should match %q", s)
 	}
 	for _, s := range misses {
-		if pkgPattern.MatchString(s) {
-			t.Errorf("pkgPattern should not match %q", s)
-		}
+		require.Falsef(t, pkgPattern.MatchString(s), "pkgPattern should not match %q", s)
 	}
 }
 
@@ -60,38 +58,30 @@ func newTestState() *daemonState {
 func TestHandleRequest_Ping(t *testing.T) {
 	state := newTestState()
 	resp := handleRequest(state, protocolRequest{Action: "ping"})
-	if resp.Output != "pong" {
-		t.Errorf("ping response = %v, want pong", resp.Output)
-	}
+	require.Equal(t, "pong", resp.Output)
 }
 
 func TestHandleRequest_SessionsEmpty(t *testing.T) {
 	state := newTestState()
 	resp := handleRequest(state, protocolRequest{Action: "sessions"})
-	if resp.Output != "No active Julia sessions." {
-		t.Errorf("sessions response = %q", resp.Output)
-	}
+	require.Equal(t, "No active Julia sessions.", resp.Output)
 }
 
 func TestHandleRequest_UnknownAction(t *testing.T) {
 	state := newTestState()
 	resp := handleRequest(state, protocolRequest{Action: "bogus"})
-	if resp.Error == "" {
-		t.Error("expected error for unknown action")
-	}
+	require.NotEmpty(t, resp.Error)
 }
 
 func TestHandleRequest_Stop(t *testing.T) {
 	state := newTestState()
 	resp := handleRequest(state, protocolRequest{Action: "stop"})
-	if resp.Output != "Daemon stopping." {
-		t.Errorf("stop response = %v", resp.Output)
-	}
+	require.Equal(t, "Daemon stopping.", resp.Output)
 	select {
 	case <-state.stopCh:
 		// closed as expected
 	default:
-		t.Error("stopCh not closed after stop action")
+		require.Fail(t, "stopCh not closed after stop action")
 	}
 }
 
@@ -101,14 +91,18 @@ func TestHandleRequest_Stop(t *testing.T) {
 // The returned WaitGroup is done when the daemon exits.
 func startTestDaemon(t *testing.T) (socketPath string, stop func(), wg *sync.WaitGroup) {
 	t.Helper()
-	socketPath = filepath.Join(t.TempDir(), "test.sock")
+	socketDir, err := os.MkdirTemp("/tmp", "julia-client-test-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(socketDir) })
+	socketPath = filepath.Join(socketDir, "test.sock")
+	errCh := make(chan error, 1)
 	wg = &sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		serveDaemon(socketPath, time.Hour)
+		errCh <- serveDaemon(socketPath, time.Hour)
 	}()
-	waitForSocket(t, socketPath)
+	waitForSocket(t, socketPath, errCh)
 	stop = func() {
 		conn, _ := net.Dial("unix", socketPath)
 		if conn != nil {
@@ -120,28 +114,31 @@ func startTestDaemon(t *testing.T) (socketPath string, stop func(), wg *sync.Wai
 	return
 }
 
-func waitForSocket(t *testing.T, socketPath string) {
+func waitForSocket(t *testing.T, socketPath string, errCh <-chan error) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
+		select {
+		case err := <-errCh:
+			require.NoError(t, err)
+		default:
+		}
 		if _, err := os.Stat(socketPath); err == nil {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatal("daemon socket did not appear in time")
+	require.Fail(t, "daemon socket did not appear in time")
 }
 
 func sendRequest(t *testing.T, socketPath string, req protocolRequest) response {
 	t.Helper()
 	conn, err := net.Dial("unix", socketPath)
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
+	require.NoError(t, err)
 	defer conn.Close()
-	json.NewEncoder(conn).Encode(req)
+	require.NoError(t, json.NewEncoder(conn).Encode(req))
 	var resp response
-	json.NewDecoder(conn).Decode(&resp)
+	require.NoError(t, json.NewDecoder(conn).Decode(&resp))
 	return resp
 }
 
@@ -152,9 +149,7 @@ func TestDaemonPingOverSocket(t *testing.T) {
 	defer stop()
 
 	resp := sendRequest(t, socketPath, protocolRequest{Action: "ping"})
-	if resp.Output != "pong" {
-		t.Errorf("ping over socket = %v, want pong", resp.Output)
-	}
+	require.Equal(t, "pong", resp.Output)
 }
 
 // ---- Julia integration ----
@@ -163,7 +158,8 @@ func TestEvalBasic(t *testing.T) {
 	socketPath, stop, _ := startTestDaemon(t)
 	defer stop()
 
-	cwd, _ := os.Getwd()
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
 	send := func(req protocolRequest) response {
 		if req.Cwd == "" {
 			req.Cwd = cwd
@@ -173,38 +169,28 @@ func TestEvalBasic(t *testing.T) {
 
 	// Eval basic expression
 	resp := send(protocolRequest{Action: "eval", Code: `println("hello world")`})
-	if resp.Error != "" {
-		t.Fatalf("eval error: %v", resp.Error)
-	}
-	out := resp.Output
-	if out != "hello world\n" {
-		t.Errorf("eval output = %q, want %q", out, "hello world\n")
-	}
+	require.Empty(t, resp.Error)
+	require.Equal(t, "hello world\n", resp.Output)
 
 	// State persists across calls
-	send(protocolRequest{Action: "eval", Code: "x = 42"})
+	resp = send(protocolRequest{Action: "eval", Code: "x = 42"})
+	require.Empty(t, resp.Error)
 	resp2 := send(protocolRequest{Action: "eval", Code: "println(x)"})
-	out2 := resp2.Output
-	if out2 != "42\n" {
-		t.Errorf("state not persisted: x = %q, want %q", out2, "42\n")
-	}
+	require.Empty(t, resp2.Error)
+	require.Equal(t, "42\n", resp2.Output)
 
 	// Fresh eval clears state before running code.
 	resp3 := send(protocolRequest{Action: "eval", Code: "println(isdefined(Main, :x))", Fresh: true})
-	out3 := resp3.Output
-	if out3 != "false\n" {
-		t.Errorf("after fresh eval x should be undefined, got %q", out3)
-	}
+	require.Empty(t, resp3.Error)
+	require.Equal(t, "false\n", resp3.Output)
 
 	// println adds trailing newline; print does not
 	resp4 := send(protocolRequest{Action: "eval", Code: `print("no-nl")`})
-	if resp4.Output != "no-nl" {
-		t.Errorf("print output = %q, want %q", resp4.Output, "no-nl")
-	}
+	require.Empty(t, resp4.Error)
+	require.Equal(t, "no-nl", resp4.Output)
 	resp5 := send(protocolRequest{Action: "eval", Code: `println("with-nl")`})
-	if resp5.Output != "with-nl\n" {
-		t.Errorf("println output = %q, want %q", resp5.Output, "with-nl\n")
-	}
+	require.Empty(t, resp5.Error)
+	require.Equal(t, "with-nl\n", resp5.Output)
 }
 
 // TestScriptFile exercises the full main() routing: julia-client script.jl
@@ -216,33 +202,67 @@ func TestScriptFile(t *testing.T) {
 	cmd := exec.Command(os.Args[0], "--socket", socketPath, "testdata/compute.jl")
 	cmd.Env = append(os.Environ(), "TEST_CLI=1")
 	out, err := cmd.Output()
+	stderr := ""
 	if err != nil {
-		stderr := ""
 		if e, ok := err.(*exec.ExitError); ok {
 			stderr = string(e.Stderr)
 		}
-		t.Fatalf("script run failed: %v\n%s", err, stderr)
 	}
-	if got := string(out); got != "42\n" {
-		t.Errorf("script output = %q, want %q", got, "42\n")
-	}
+	require.NoErrorf(t, err, "script stderr:\n%s", stderr)
+	require.Equal(t, "42\n", string(out))
 }
 
 func TestPrintResult(t *testing.T) {
 	socketPath, stop, _ := startTestDaemon(t)
 	defer stop()
 
-	cwd, _ := os.Getwd()
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
 	resp := sendRequest(t, socketPath, protocolRequest{
 		Action:      "eval",
 		Code:        "1 + 1",
 		Cwd:         cwd,
 		PrintResult: true,
 	})
-	if resp.Error != "" {
-		t.Fatalf("print_result error: %v", resp.Error)
+	require.Empty(t, resp.Error)
+	require.Equal(t, "2\n", resp.Output)
+}
+
+func TestRevisePicksUpPackageChanges(t *testing.T) {
+	socketPath, stop, _ := startTestDaemon(t)
+	defer stop()
+
+	pkgDir := t.TempDir()
+	srcDir := filepath.Join(pkgDir, "src")
+	require.NoError(t, os.Mkdir(srcDir, 0755))
+	projectToml, err := os.ReadFile(filepath.Join("testdata", "TestRevPkg", "Project.toml"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "Project.toml"), projectToml, 0644))
+
+	srcFile := filepath.Join(srcDir, "TestRevPkg.jl")
+	writePackage := func(greeting string) {
+		t.Helper()
+		err := os.WriteFile(srcFile, []byte("module TestRevPkg\ngreet() = "+greeting+"\nend\n"), 0644)
+		require.NoError(t, err)
 	}
-	if resp.Output != "2\n" {
-		t.Errorf("print_result output = %q, want %q", resp.Output, "2\n")
+	writePackage(`"hello"`)
+
+	send := func(code string) response {
+		t.Helper()
+		resp := sendRequest(t, socketPath, protocolRequest{
+			Action: "eval",
+			Code:   code,
+			Cwd:    pkgDir,
+		})
+		require.Empty(t, resp.Error, "eval %q failed", code)
+		return resp
 	}
+
+	send("using TestRevPkg")
+	resp := send("println(TestRevPkg.greet())")
+	require.Equal(t, "hello\n", resp.Output)
+
+	writePackage(`"goodbye"`)
+	resp = send("println(TestRevPkg.greet())")
+	require.Equal(t, "goodbye\n", resp.Output)
 }
