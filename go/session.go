@@ -52,7 +52,6 @@ func newJuliaSession(projectVal, sentinel, juliaCmd string, logFile *os.File) *J
 	}
 }
 
-
 func (s *JuliaSession) start(workDir string) error {
 	exe := "julia"
 	var channelArgs, extraFlags []string
@@ -115,6 +114,9 @@ func (s *JuliaSession) start(workDir string) error {
 	// Mirror the Julia REPL: load InteractiveUtils so subtypes, @which, etc. work
 	if _, err := s.executeRaw("using InteractiveUtils", startupTimeout); err != nil {
 		return fmt.Errorf("failed to load InteractiveUtils: %w", err)
+	}
+	if _, err := s.executeRaw("try; using Revise; catch; end", startupTimeout); err != nil {
+		return fmt.Errorf("failed to initialize Revise: %w", err)
 	}
 	return nil
 }
@@ -199,12 +201,12 @@ func (s *JuliaSession) execute(code string, timeoutSecs float64, printResult boo
 	var wrapped string
 	if printResult {
 		wrapped = fmt.Sprintf(
-			`show(IOContext(stdout, :limit => true), MIME("text/plain"), include_string(Main, String(hex2bytes("%s"))));println(stdout)`,
+			`try; Revise.revise(); catch; end; show(IOContext(stdout, :limit => true), MIME("text/plain"), include_string(Main, String(hex2bytes("%s"))));println(stdout)`,
 			hexCode,
 		)
 	} else {
 		wrapped = fmt.Sprintf(
-			`include_string(Main, String(hex2bytes("%s")));nothing`,
+			`try; Revise.revise(); catch; end; include_string(Main, String(hex2bytes("%s")));nothing`,
 			hexCode,
 		)
 	}
