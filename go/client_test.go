@@ -273,6 +273,44 @@ func TestEvalErrorTraceSaved(t *testing.T) {
 	require.Contains(t, resp.Error, "Stacktrace:")
 }
 
+func TestEvalTestFailureKeepsNativeNoiseLevel(t *testing.T) {
+	socketPath, stop, _ := startTestDaemon(t)
+	defer stop()
+
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+
+	resp := sendRequest(t, socketPath, protocolRequest{
+		Action: "eval",
+		Code:   `using Test; @testset "x" begin @test false end`,
+		Cwd:    cwd,
+	})
+	require.Contains(t, resp.Output, "x: Test Failed")
+	require.Contains(t, resp.Output, "Test Summary:")
+	require.Equal(t, "ERROR: Some tests did not pass: 0 passed, 1 failed, 0 errored, 0 broken.", resp.Error)
+	require.NotContains(t, resp.Error, "Stacktrace:")
+	require.NotContains(t, resp.Error, "Trace saved")
+	require.NotContains(t, resp.Error, "TestSetException")
+
+	trace := sendRequest(t, socketPath, protocolRequest{
+		Action:     "trace",
+		Cwd:        cwd,
+		TraceLevel: "full",
+	})
+	require.Empty(t, trace.Error)
+	require.Contains(t, trace.Output, "TestSetException")
+
+	resp = sendRequest(t, socketPath, protocolRequest{
+		Action: "eval",
+		Code:   `using Test; @test false`,
+		Cwd:    cwd,
+	})
+	require.Contains(t, resp.Output, "Test Failed")
+	require.Equal(t, "ERROR: There was an error during testing", resp.Error)
+	require.NotContains(t, resp.Error, "Stacktrace:")
+	require.NotContains(t, resp.Error, "FallbackTestSetException")
+}
+
 func TestRevisePicksUpPackageChanges(t *testing.T) {
 	socketPath, stop, _ := startTestDaemon(t)
 	defer stop()

@@ -6,7 +6,7 @@ description: "Run Julia code with session state persistence, project env auto-de
 ## Running code
 
 ```bash
-julia-client -e 'x=1' # Evaluate
+julia-client -e 'x=setupOnce()' # Evaluate
 julia-client -E 'x' # Evaluate and display
 
 # Long-running tasks (pkg install, compile, plot, heavy compute): set longer timeout or disable timeout (0)
