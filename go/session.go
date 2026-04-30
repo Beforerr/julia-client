@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"crypto/rand"
+	_ "embed"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -16,6 +17,9 @@ import (
 
 	"golang.org/x/sync/singleflight"
 )
+
+//go:embed julia_client_runtime.jl
+var juliaClientRuntime string
 
 const (
 	defaultEvalTimeout = 60.0
@@ -111,12 +115,9 @@ func (s *JuliaSession) start(workDir string) error {
 	if _, err := s.executeRaw("", startupTimeout); err != nil {
 		return fmt.Errorf("Julia startup failed: %w", err)
 	}
-	// Mirror the Julia REPL: load InteractiveUtils so subtypes, @which, etc. work
-	if _, err := s.executeRaw("using InteractiveUtils", startupTimeout); err != nil {
-		return fmt.Errorf("failed to load InteractiveUtils: %w", err)
-	}
-	if _, err := s.executeRaw("try; using Revise; catch; end", startupTimeout); err != nil {
-		return fmt.Errorf("failed to initialize Revise: %w", err)
+	runtimeHex := hex.EncodeToString([]byte(juliaClientRuntime))
+	if _, err := s.executeRaw(fmt.Sprintf(`include_string(Main, String(hex2bytes("%s")), "julia-client runtime")`, runtimeHex), startupTimeout); err != nil {
+		return fmt.Errorf("failed to load julia-client runtime: %w", err)
 	}
 	return nil
 }
@@ -128,6 +129,67 @@ func (s *JuliaSession) isAlive() bool {
 type readResult struct {
 	output string
 	err    error
+}
+
+type juliaEvalError struct {
+	short string
+	smart string
+	full  string
+}
+
+func (e *juliaEvalError) Error() string {
+	return e.short
+}
+
+func (s *JuliaSession) errorStartMarker() string {
+	return s.sentinel + "_ERROR_START"
+}
+
+func (s *JuliaSession) errorEndMarker() string {
+	return s.sentinel + "_ERROR_END"
+}
+
+func decodeHexString(s string) (string, error) {
+	b, err := hex.DecodeString(strings.TrimSpace(s))
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func (s *JuliaSession) parseJuliaError(output string) (string, *juliaEvalError) {
+	start := s.errorStartMarker()
+	idx := strings.Index(output, start+"\n")
+	if idx < 0 {
+		return output, nil
+	}
+
+	prefix := output[:idx]
+	if len(prefix) > 0 && prefix[len(prefix)-1] == '\n' {
+		prefix = prefix[:len(prefix)-1]
+	}
+
+	rest := output[idx+len(start)+1:]
+	parts := strings.SplitN(rest, "\n", 4)
+	if len(parts) < 4 {
+		return output, nil
+	}
+	decoded := make([]string, 3)
+	for i := range decoded {
+		var err error
+		decoded[i], err = decodeHexString(parts[i])
+		if err != nil {
+			return output, nil
+		}
+	}
+	if !strings.HasPrefix(parts[3], s.errorEndMarker()) {
+		return output, nil
+	}
+	return prefix, &juliaEvalError{
+		short: decoded[0],
+		smart: decoded[1],
+		full:  decoded[2],
+	}
 }
 
 func (s *JuliaSession) executeRaw(code string, timeoutSecs float64) (string, error) {
@@ -198,18 +260,9 @@ func (s *JuliaSession) execute(code string, timeoutSecs float64, printResult boo
 	}
 
 	hexCode := hex.EncodeToString([]byte(code))
-	var wrapped string
-	if printResult {
-		wrapped = fmt.Sprintf(
-			`try; Revise.revise(); catch; end; show(IOContext(stdout, :limit => true), MIME("text/plain"), include_string(Main, String(hex2bytes("%s"))));println(stdout)`,
-			hexCode,
-		)
-	} else {
-		wrapped = fmt.Sprintf(
-			`try; Revise.revise(); catch; end; include_string(Main, String(hex2bytes("%s")));nothing`,
-			hexCode,
-		)
-	}
+	wrapped := fmt.Sprintf(`Main.JuliaClientRuntime.run("%s", %t, "%s", "%s")`,
+		hexCode, printResult, s.errorStartMarker(), s.errorEndMarker(),
+	)
 
 	if s.logFile != nil {
 		fmt.Fprintf(s.logFile, "[%s] julia> %s\n", time.Now().Format("15:04:05"), code)
@@ -219,8 +272,15 @@ func (s *JuliaSession) execute(code string, timeoutSecs float64, printResult boo
 	if err != nil {
 		return "", err
 	}
+	output, juliaErr := s.parseJuliaError(output)
 	if s.logFile != nil && output != "" {
 		fmt.Fprintf(s.logFile, "%s\n\n", output)
+	}
+	if juliaErr != nil {
+		if s.logFile != nil {
+			fmt.Fprintf(s.logFile, "%s\n\n", juliaErr.full)
+		}
+		return output, juliaErr
 	}
 	return output, nil
 }
@@ -238,17 +298,19 @@ func (s *JuliaSession) kill() {
 
 // SessionManager tracks multiple named Julia sessions.
 type SessionManager struct {
-	mu       sync.Mutex
-	sessions map[string]*JuliaSession
-	sf       singleflight.Group
-	logDir   string
+	mu         sync.Mutex
+	sessions   map[string]*JuliaSession
+	lastErrors map[string]*juliaEvalError
+	sf         singleflight.Group
+	logDir     string
 }
 
 func newSessionManager() *SessionManager {
 	logDir, _ := os.MkdirTemp("", "julia-client-logs-")
 	return &SessionManager{
-		sessions: make(map[string]*JuliaSession),
-		logDir:   logDir,
+		sessions:   make(map[string]*JuliaSession),
+		lastErrors: make(map[string]*juliaEvalError),
+		logDir:     logDir,
 	}
 }
 
@@ -332,10 +394,25 @@ func (m *SessionManager) restart(session, project, cwd string) {
 	m.mu.Lock()
 	sess := m.sessions[key]
 	delete(m.sessions, key)
+	delete(m.lastErrors, key)
 	m.mu.Unlock()
 	if sess != nil {
 		sess.kill()
 	}
+}
+
+func (m *SessionManager) recordError(session, project, cwd string, err *juliaEvalError) {
+	key := m.key(session, project, cwd)
+	m.mu.Lock()
+	m.lastErrors[key] = err
+	m.mu.Unlock()
+}
+
+func (m *SessionManager) lastError(session, project, cwd string) *juliaEvalError {
+	key := m.key(session, project, cwd)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastErrors[key]
 }
 
 type sessionInfo struct {

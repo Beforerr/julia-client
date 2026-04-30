@@ -39,8 +39,19 @@ echo 'println("hello")' | julia-client
 
 # Session management
 julia-client sessions   # list active sessions
+julia-client trace      # show the last saved Julia traceback without rerunning
 julia-client stop       # shut down the daemon
+
+# Traceback levels
+julia-client --trace full -e 'error("boom")'
+julia-client trace --trace smart
 ```
+
+Traceback levels:
+
+- `short`: exception message only.
+- `smart`: default eval output; user/project frames plus nearby boundary frames, hiding Julia/client internals.
+- `full`: Julia's full traceback, including runtime and REPL frames.
 
 ## Architecture
 

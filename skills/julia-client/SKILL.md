@@ -11,12 +11,14 @@ julia-client -E 'x' # Evaluate and display
 
 # Long-running tasks (pkg install, compile, plot, heavy compute): set longer timeout or disable timeout (0)
 julia-client --timeout 300 heavy_script.jl
+
+julia-client trace --trace full # show the last saved Julia traceback without rerunning
 ```
 
 ## Tips
 
 - Run setup (e.g. `Pkg.activate`, `using PackageOnce`) once per session.
-- Prefer `Revise` for automatically updating function definitions: only use `--fresh` flag when clean state is must.
+- Prefer relying on `Revise` for automatically updating function definitions: only use `--fresh` flag when clean state is required.
 
 ## Session management
 

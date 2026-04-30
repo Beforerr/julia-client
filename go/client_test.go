@@ -228,6 +228,51 @@ func TestPrintResult(t *testing.T) {
 	require.Equal(t, "2\n", resp.Output)
 }
 
+func TestEvalErrorTraceSaved(t *testing.T) {
+	socketPath, stop, _ := startTestDaemon(t)
+	defer stop()
+
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+
+	resp := sendRequest(t, socketPath, protocolRequest{
+		Action: "eval",
+		Code:   `let f = () -> error("boom"); g = () -> f(); g(); end`,
+		Cwd:    cwd,
+	})
+	require.Empty(t, resp.Output)
+	require.Contains(t, resp.Error, "boom")
+	require.Contains(t, resp.Error, "Stacktrace:")
+	require.Contains(t, resp.Error, "julia-client trace")
+	require.NotContains(t, resp.Error, "eval_user_input")
+
+	trace := sendRequest(t, socketPath, protocolRequest{
+		Action:     "trace",
+		Cwd:        cwd,
+		TraceLevel: "smart",
+	})
+	require.Empty(t, trace.Error)
+	require.Contains(t, trace.Output, "Stacktrace:")
+	require.Contains(t, trace.Output, "julia-client-eval")
+	require.NotContains(t, trace.Output, "eval_user_input")
+
+	trace = sendRequest(t, socketPath, protocolRequest{
+		Action:     "trace",
+		Cwd:        cwd,
+		TraceLevel: "full",
+	})
+	require.Empty(t, trace.Error)
+	require.Contains(t, trace.Output, "eval_user_input")
+
+	resp = sendRequest(t, socketPath, protocolRequest{
+		Action:     "eval",
+		Code:       `let f = () -> error("boom"); g = () -> f(); g(); end`,
+		Cwd:        cwd,
+		TraceLevel: "full",
+	})
+	require.Contains(t, resp.Error, "Stacktrace:")
+}
+
 func TestRevisePicksUpPackageChanges(t *testing.T) {
 	socketPath, stop, _ := startTestDaemon(t)
 	defer stop()
