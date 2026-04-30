@@ -123,12 +123,19 @@ func normalizedTraceLevel(level string) string {
 }
 
 func formatJuliaError(err *juliaEvalError, level string) string {
+	traceHint := strings.TrimSpace(err.smart) != strings.TrimSpace(err.short)
 	switch normalizedTraceLevel(level) {
 	case "short":
+		if !traceHint {
+			return err.short
+		}
 		return err.short + "\n\nTrace saved: run `julia-client trace --trace [smart|full]` to inspect"
 	case "full":
 		return err.full
 	default:
+		if !traceHint {
+			return err.short
+		}
 		return err.smart + "Trace saved: run `julia-client trace` to inspect"
 	}
 }

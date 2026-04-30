@@ -138,18 +138,38 @@ function _display_error(err)
     return err
 end
 
+function _is_test_summary_exception(err)
+    err = _display_error(err)
+    name = nameof(typeof(err))
+    mod = parentmodule(typeof(err))
+    return string(nameof(mod)) == "Test" && string(name) in ("TestSetException", "FallbackTestSetException")
+end
+
 function _render_error(err, bt)
     frames = stacktrace(bt)
     cut = findfirst(frame -> frame.func === :include_string || String(frame.file) == "none", frames)
     cut === nothing || (frames = frames[1:max(cut - 2, 1)])
     display_err = _display_error(err)
-    short = "ERROR: " * sprint(showerror, display_err)
-    smart = short * "\n" * _render_selected(frames; include_omitted=true)
+    test_exception = _is_test_summary_exception(display_err)
+    short_body = if test_exception
+        sprint() do io
+            Base.invokelatest(showerror, io, display_err, bt)
+        end
+    else
+        sprint(showerror, display_err)
+    end
+    short = "ERROR: " * short_body
+    if test_exception
+        smart = short
+    else
+        smart =  short * "\n" * _render_selected(frames; include_omitted=true)
+    end
     full = sprint(showerror, err, bt)
     return short, smart, full
 end
 
 function _write_error(start_marker, end_marker, short, smart, full)
+    flush(stderr)
     write(stdout, "\n")
     println(stdout, start_marker)
     println(stdout, bytes2hex(Vector{UInt8}(codeunits(short))))
