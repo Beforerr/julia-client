@@ -53,9 +53,23 @@ func handleRequest(state *daemonState, req protocolRequest) response {
 			if !sess.isAlive() {
 				state.manager.remove(req.Session, req.Project, req.Cwd)
 			}
+			if juliaErr, ok := err.(*juliaEvalError); ok {
+				state.manager.recordError(req.Session, req.Project, req.Cwd, juliaErr)
+				return response{
+					Output: output,
+					Error:  formatJuliaError(juliaErr, req.TraceLevel),
+				}
+			}
 			return errResp(err.Error())
 		}
 		return response{Output: output}
+
+	case "trace":
+		err := state.manager.lastError(req.Session, req.Project, req.Cwd)
+		if err == nil {
+			return errResp("No saved Julia traceback for this session.")
+		}
+		return response{Output: formatTraceOutput(err, req.TraceLevel)}
 
 	case "sessions":
 		sessions := state.manager.list()
@@ -93,6 +107,44 @@ func handleRequest(state *daemonState, req protocolRequest) response {
 
 func errResp(msg string) response {
 	return response{Error: msg}
+}
+
+func normalizedTraceLevel(level string) string {
+	switch strings.ToLower(level) {
+	case "short", "compact":
+		return "short"
+	case "", "smart", "default":
+		return "smart"
+	case "full", "long", "verbose":
+		return "full"
+	default:
+		return "smart"
+	}
+}
+
+func formatJuliaError(err *juliaEvalError, level string) string {
+	switch normalizedTraceLevel(level) {
+	case "short":
+		return err.short + "\n\nTrace saved: run `julia-client trace --trace [smart|full]` to inspect"
+	case "full":
+		return err.full
+	default:
+		return err.smart + "Trace saved: run `julia-client trace` to inspect"
+	}
+}
+
+func formatTraceOutput(err *juliaEvalError, level string) string {
+	if level == "" {
+		level = "full"
+	}
+	switch normalizedTraceLevel(level) {
+	case "short":
+		return err.short + "\n"
+	case "full":
+		return err.full + "\n"
+	default:
+		return err.smart
+	}
 }
 
 func handleConn(conn net.Conn, state *daemonState) {
